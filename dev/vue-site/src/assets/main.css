@@ -1,0 +1,36 @@
+@import './base.css';
+@import './theme.css';
+@import './auth-panel.css';
+
+#app {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* 内容区滚动条 */
+.page-scroll-body,
+.portal-page,
+.auth-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, 0.35) transparent;
+}
+
+.page-scroll-body::-webkit-scrollbar,
+.portal-page::-webkit-scrollbar,
+.auth-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.page-scroll-body::-webkit-scrollbar-thumb,
+.portal-page::-webkit-scrollbar-thumb,
+.auth-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.35);
+}
+
+.page-scroll-body::-webkit-scrollbar-thumb:hover,
+.portal-page::-webkit-scrollbar-thumb:hover,
+.auth-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.55);
+}
