@@ -6,7 +6,7 @@ import { isDtcPlatform } from '@/constants/platforms'
 const STORAGE_KEY = 'crosshub_platform_accounts'
 const REMOVED_DEMO_IDS_KEY = 'crosshub_removed_demo_store_ids'
 
-const ALLOWED_PLATFORMS = ['temu', 'aliexpress', '1688', 'amazon', 'shopify', 'wordpress']
+const ALLOWED_PLATFORMS = ['temu', 'aliexpress', '1688', 'amazon', 'walmart', 'pdd', 'douyin', 'channels', 'shopify', 'wordpress']
 
 const DEMO_STORES = [
   {
@@ -72,6 +72,70 @@ const DEMO_STORES = [
     account: 'amazon.eu@yituo-outdoor.com',
     password: 'Amazon@Demo456',
     boundAt: '2026-06-23 17:30:00',
+  },
+  {
+    id: 'demo_walmart_1',
+    platform: 'walmart',
+    storeName: '亿拓 Walmart 美国店',
+    account: 'walmart.us@yituo-outdoor.com',
+    password: 'Walmart@Demo123',
+    boundAt: '2026-06-24 09:00:00',
+  },
+  {
+    id: 'demo_walmart_2',
+    platform: 'walmart',
+    storeName: '亿拓 Walmart 加拿大店',
+    account: 'walmart.ca@yituo-outdoor.com',
+    password: 'Walmart@Demo456',
+    boundAt: '2026-06-24 11:30:00',
+  },
+  {
+    id: 'demo_pdd_1',
+    platform: 'pdd',
+    storeName: '亿拓户外拼多多旗舰店',
+    account: 'pdd@yituo-outdoor.com',
+    password: 'Pdd@Demo123',
+    boundAt: '2026-06-24 13:00:00',
+  },
+  {
+    id: 'demo_pdd_2',
+    platform: 'pdd',
+    storeName: '亿拓拼多多露营专区',
+    account: 'pdd.outdoor@yituo-outdoor.com',
+    password: 'Pdd@Demo456',
+    boundAt: '2026-06-24 14:30:00',
+  },
+  {
+    id: 'demo_douyin_1',
+    platform: 'douyin',
+    storeName: '亿拓户外抖音小店',
+    account: 'douyin@yituo-outdoor.com',
+    password: 'Douyin@Demo123',
+    boundAt: '2026-06-24 15:00:00',
+  },
+  {
+    id: 'demo_douyin_2',
+    platform: 'douyin',
+    storeName: '亿拓抖音直播号',
+    account: 'douyin.live@yituo-outdoor.com',
+    password: 'Douyin@Demo456',
+    boundAt: '2026-06-24 16:00:00',
+  },
+  {
+    id: 'demo_channels_1',
+    platform: 'channels',
+    storeName: '亿拓户外视频号',
+    account: 'channels@yituo-outdoor.com',
+    password: 'Channels@Demo123',
+    boundAt: '2026-06-24 17:00:00',
+  },
+  {
+    id: 'demo_channels_2',
+    platform: 'channels',
+    storeName: '亿拓视频号露营号',
+    account: 'channels.camp@yituo-outdoor.com',
+    password: 'Channels@Demo456',
+    boundAt: '2026-06-24 18:00:00',
   },
   {
     id: 'demo_shopify_1',

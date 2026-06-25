@@ -17,13 +17,26 @@ const tasks = computed(() => context.value?.tasks || [])
 const assignedStores = computed(() => {
   const stores = context.value?.stores
   if (!stores) return []
-  return [...(stores.temu || []), ...(stores.aliexpress || []), ...(stores['1688'] || []), ...(stores.dtc || [])]
+  return [
+    ...(stores.temu || []),
+    ...(stores.aliexpress || []),
+    ...(stores.walmart || []),
+    ...(stores.pdd || []),
+    ...(stores.douyin || []),
+    ...(stores.channels || []),
+    ...(stores['1688'] || []),
+    ...(stores.dtc || []),
+  ]
 })
 
 const platformLabels = computed(() => {
   const labels = (auth.employee.platforms || []).map((p) => {
     if (p === 'temu') return 'Temu'
     if (p === 'aliexpress') return 'AliExpress'
+    if (p === 'walmart') return 'Walmart'
+    if (p === 'pdd') return '拼多多'
+    if (p === 'douyin') return '抖音'
+    if (p === 'channels') return '视频号'
     if (p === '1688') return '1688'
     if (p === 'shopify' || p === 'wordpress') return '独立站'
     return p

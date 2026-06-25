@@ -6,6 +6,24 @@ import {
   syncAmazonDailyData,
 } from './amazonDailyLocal'
 
+import {
+  fetchAmazonBossData,
+  markOutboundShipped,
+  syncAmazonBossData,
+} from './amazonBossLocal'
+
+export function loadAmazonBossInsights(stores) {
+  return fetchAmazonBossData(stores)
+}
+
+export async function refreshAmazonBossInsights(stores, options = {}) {
+  return syncAmazonBossData(stores, options)
+}
+
+export function shipOutboundOrder(id, payload) {
+  return markOutboundShipped(id, payload)
+}
+
 export function loadAmazonDailyWorkflow(stores) {
   return fetchAmazonDailyData(stores)
 }

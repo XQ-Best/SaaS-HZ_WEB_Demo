@@ -13,16 +13,17 @@ html {
 body {
   height: 100%;
   overflow: hidden;
-  color: #152235;
-  line-height: 1.6;
+  color: var(--ch-text, #1d2129);
+  line-height: 1.5715;
   font-family:
-    Inter,
-    "Microsoft YaHei",
+    "Plus Jakarta Sans",
+    -apple-system,
+    BlinkMacSystemFont,
     "PingFang SC",
+    "Microsoft YaHei",
     "Segoe UI",
-    Arial,
     sans-serif;
-  font-size: 15px;
+  font-size: 14px;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;

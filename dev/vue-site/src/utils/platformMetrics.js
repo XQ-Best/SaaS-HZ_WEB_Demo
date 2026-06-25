@@ -1,6 +1,8 @@
 import { buildStoreAssigneeMap } from '@/utils/storeAssignment'
 import { summarizeTemuProducts } from '@/utils/temuStore'
 import { summarizeAliExpressOrders } from '@/utils/aliexpress'
+import { summarizeWalmartOrders, summarizeWalmartListings } from '@/utils/walmart'
+import { summarizeDomesticOrders, summarizeDomesticIssues } from '@/utils/domesticPlatform'
 import { countAmazonPendingAlerts } from '@/utils/amazon'
 import { summarize1688PurchaseOrders } from '@/utils/alibaba1688'
 import { formatMoney } from '@/utils/format'
@@ -22,7 +24,7 @@ function primaryOwner(employees, platformKey, assigneeMap, storeIds) {
 }
 
 export function buildPlatformSalesRows(payload) {
-  const { temu, aliexpress, amazon, alibaba1688, dtc, employees = [] } = payload
+  const { temu, aliexpress, walmart, pdd, douyin, channels, amazon, alibaba1688, dtc, employees = [] } = payload
   const assigneeMap = buildStoreAssigneeMap(employees)
   const rows = []
 
@@ -54,6 +56,43 @@ export function buildPlatformSalesRows(payload) {
       alerts: pending,
       storeCount: storeIds.length,
       revenueText: summary.totalAmountText,
+    })
+  }
+
+  if (walmart?.orders?.length || walmart?.stores?.length) {
+    const orderSummary = summarizeWalmartOrders(walmart.orders || [])
+    const issueSummary = summarizeWalmartListings(walmart.issues || [])
+    const storeIds = (walmart.stores || []).map((store) => store.id)
+    rows.push({
+      id: 'walmart',
+      name: 'Walmart',
+      owner: primaryOwner(employees, 'walmart', assigneeMap, storeIds),
+      revenue: orderSummary.totalAmount,
+      orders: orderSummary.total,
+      alerts: orderSummary.pending + issueSummary.open,
+      storeCount: storeIds.length,
+      revenueText: orderSummary.totalAmountText,
+    })
+  }
+
+  for (const item of [
+    { key: 'pdd', name: '拼多多', data: pdd },
+    { key: 'douyin', name: '抖音', data: douyin },
+    { key: 'channels', name: '视频号', data: channels },
+  ]) {
+    if (!item.data?.orders?.length && !item.data?.stores?.length) continue
+    const orderSummary = summarizeDomesticOrders(item.data.orders || [])
+    const issueSummary = summarizeDomesticIssues(item.data.issues || [])
+    const storeIds = (item.data.stores || []).map((store) => store.id)
+    rows.push({
+      id: item.key,
+      name: item.name,
+      owner: primaryOwner(employees, item.key, assigneeMap, storeIds),
+      revenue: orderSummary.totalAmount,
+      orders: orderSummary.total,
+      alerts: orderSummary.pending + issueSummary.open,
+      storeCount: storeIds.length,
+      revenueText: orderSummary.totalAmountText,
     })
   }
 

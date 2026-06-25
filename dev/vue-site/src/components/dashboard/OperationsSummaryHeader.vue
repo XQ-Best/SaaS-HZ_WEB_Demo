@@ -49,6 +49,10 @@ const summaryItems = computed(() => [
 const platformRouteMap = {
   temu: 'temu',
   aliexpress: 'aliexpress',
+  walmart: 'walmart',
+  pdd: 'pdd',
+  douyin: 'douyin',
+  channels: 'channels',
   amazon: 'amazon',
   '1688': '1688',
   dtc: 'dtc',

@@ -13,26 +13,26 @@ const svgRef = ref(null)
 const prefersReducedMotion = ref(false)
 
 const pointer = ref({ x: 0, y: 0 })
-const mouseInSvg = ref({ x: 110, y: 118 })
+const mouseInSvg = ref({ x: 110, y: 100 })
 const isBlinking = ref(false)
 
 const parallax = computed(() => ({
-  x: pointer.value.x * 16,
-  y: pointer.value.y * 12,
+  x: pointer.value.x * 14,
+  y: pointer.value.y * 10,
 }))
 
 const headTilt = computed(() => {
   if (coveringEyes.value) {
-    return { rotate: -4, translateY: 4 }
+    return { rotate: -2, translateY: 3 }
   }
   return {
-    rotate: pointer.value.x * 6,
-    translateY: pointer.value.y * 3,
+    rotate: pointer.value.x * 4,
+    translateY: pointer.value.y * 2,
   }
 })
 
-const leftPupil = computed(() => (coveringEyes.value ? { x: 0, y: 0 } : pupilOffset(76, 118)))
-const rightPupil = computed(() => (coveringEyes.value ? { x: 0, y: 0 } : pupilOffset(144, 118)))
+const leftPupil = computed(() => (coveringEyes.value ? { x: 0, y: 0 } : pupilOffset(96, 100)))
+const rightPupil = computed(() => (coveringEyes.value ? { x: 0, y: 0 } : pupilOffset(124, 100)))
 
 let blinkTimer = null
 let rafId = 0
@@ -167,120 +167,130 @@ onUnmounted(() => {
       <div class="auth-scene__mascot">
         <svg ref="svgRef" viewBox="0 0 220 260" class="mascot-svg">
           <defs>
-            <linearGradient id="yotoBody" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stop-color="#a5b4fc" />
-              <stop offset="35%" stop-color="#6366f1" />
-              <stop offset="72%" stop-color="#4f46e5" />
-              <stop offset="100%" stop-color="#0284c7" />
+            <linearGradient id="koiWhite" x1="20%" y1="0%" x2="80%" y2="100%">
+              <stop offset="0%" stop-color="#fffefb" />
+              <stop offset="100%" stop-color="#f5ebe0" />
             </linearGradient>
-            <linearGradient id="yotoShine" x1="0%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%" stop-color="rgba(255,255,255,0.42)" />
-              <stop offset="55%" stop-color="rgba(255,255,255,0.08)" />
-              <stop offset="100%" stop-color="rgba(255,255,255,0)" />
+            <linearGradient id="koiOrange" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#ff9a76" />
+              <stop offset="50%" stop-color="#ff6b4a" />
+              <stop offset="100%" stop-color="#e84a3f" />
             </linearGradient>
-            <linearGradient id="yotoEar" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stop-color="#818cf8" />
-              <stop offset="100%" stop-color="#4338ca" />
+            <linearGradient id="koiFin" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stop-color="#ffc9b5" />
+              <stop offset="100%" stop-color="#ff8a65" />
             </linearGradient>
-            <linearGradient id="yotoHand" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stop-color="#c4b5fd" />
-              <stop offset="100%" stop-color="#6366f1" />
+            <linearGradient id="koiTail" x1="50%" y1="0%" x2="50%" y2="100%">
+              <stop offset="0%" stop-color="#ff8a65" />
+              <stop offset="100%" stop-color="#e84a3f" />
             </linearGradient>
-            <radialGradient id="yotoCheek" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stop-color="rgba(251,113,133,0.45)" />
-              <stop offset="100%" stop-color="rgba(251,113,133,0)" />
+            <radialGradient id="koiBlush" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="rgba(255,138,120,0.35)" />
+              <stop offset="100%" stop-color="rgba(255,138,120,0)" />
             </radialGradient>
-            <filter id="yotoShadow" x="-30%" y="-30%" width="160%" height="160%">
-              <feDropShadow dx="0" dy="20" stdDeviation="18" flood-color="#312e81" flood-opacity="0.42" />
-            </filter>
-            <filter id="yotoSoftGlow" x="-50%" y="-50%" width="200%" height="200%">
-              <feGaussianBlur stdDeviation="3" result="blur" />
-              <feMerge>
-                <feMergeNode in="blur" />
-                <feMergeNode in="SourceGraphic" />
-              </feMerge>
+            <filter id="koiShadow" x="-20%" y="-10%" width="140%" height="140%">
+              <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#1a1a2e" flood-opacity="0.25" />
             </filter>
           </defs>
 
-          <ellipse cx="110" cy="232" rx="62" ry="11" fill="rgba(15,23,42,0.38)" />
+          <ellipse cx="110" cy="242" rx="46" ry="7" fill="rgba(0,0,0,0.12)" />
 
-          <!-- ears -->
-          <ellipse cx="58" cy="72" rx="18" ry="22" fill="url(#yotoEar)" opacity="0.92" />
-          <ellipse cx="162" cy="72" rx="18" ry="22" fill="url(#yotoEar)" opacity="0.92" />
-          <ellipse cx="58" cy="74" rx="10" ry="12" fill="rgba(255,255,255,0.12)" />
-          <ellipse cx="162" cy="74" rx="10" ry="12" fill="rgba(255,255,255,0.12)" />
+          <g filter="url(#koiShadow)">
+            <!-- tail -->
+            <g class="koi-tail">
+              <path
+                d="M 110 178 C 88 192 72 212 64 234 C 82 224 96 216 110 212 C 124 216 138 224 156 234 C 148 212 132 192 110 178 Z"
+                fill="url(#koiTail)"
+              />
+              <path
+                d="M 110 178 C 98 186 90 198 86 212 C 96 206 104 202 110 200 C 116 202 124 206 134 212 C 130 198 122 186 110 178 Z"
+                fill="rgba(255,255,255,0.2)"
+              />
+            </g>
 
-          <!-- body -->
-          <g filter="url(#yotoShadow)">
-            <rect x="38" y="64" width="144" height="148" rx="48" fill="url(#yotoBody)" />
-            <rect x="38" y="64" width="144" height="74" rx="48" fill="url(#yotoShine)" />
-            <rect x="52" y="78" width="116" height="52" rx="26" fill="rgba(255,255,255,0.06)" />
+            <!-- body -->
+            <path
+              d="M 110 52
+                 C 138 52 154 68 158 88
+                 C 162 108 160 138 150 162
+                 C 142 180 128 188 110 188
+                 C 92 188 78 180 70 162
+                 C 60 138 58 108 62 88
+                 C 66 68 82 52 110 52 Z"
+              fill="url(#koiWhite)"
+            />
+
+            <!-- kohaku patch -->
+            <path
+              d="M 110 54
+                 C 132 56 146 70 148 90
+                 C 150 112 144 140 128 162
+                 C 118 152 112 130 110 108
+                 C 106 82 96 62 82 58
+                 C 92 54 100 52 110 54 Z"
+              fill="url(#koiOrange)"
+              opacity="0.88"
+            />
+
+            <!-- belly highlight -->
+            <ellipse cx="110" cy="130" rx="28" ry="38" fill="rgba(255,255,255,0.45)" />
+
+            <!-- dorsal fin -->
+            <path
+              d="M 108 82 C 102 70 104 60 110 54 C 116 60 118 70 112 82 Z"
+              fill="url(#koiFin)"
+              opacity="0.75"
+            />
           </g>
 
-          <!-- antenna -->
-          <path d="M 104 64 Q 110 42 116 64" fill="none" stroke="#4338ca" stroke-width="4" stroke-linecap="round" />
-          <circle cx="110" cy="36" r="9" fill="#38bdf8" class="yoto-antenna" filter="url(#yotoSoftGlow)" />
-          <circle cx="110" cy="36" r="4" fill="#fff" opacity="0.55" />
-
-          <!-- idle arms -->
+          <!-- idle fins -->
           <g class="yoto-arms" :class="{ 'is-hidden': coveringEyes }">
-            <ellipse cx="28" cy="168" rx="14" ry="18" fill="url(#yotoHand)" />
-            <ellipse cx="192" cy="168" rx="14" ry="18" fill="url(#yotoHand)" />
+            <ellipse cx="68" cy="148" rx="14" ry="10" fill="url(#koiFin)" opacity="0.8" transform="rotate(-20 68 148)" />
+            <ellipse cx="152" cy="148" rx="14" ry="10" fill="url(#koiFin)" opacity="0.8" transform="rotate(20 152 148)" />
           </g>
 
           <!-- face -->
           <g class="yoto-face" :class="{ 'is-blinking': isBlinking && !coveringEyes }">
             <g class="yoto-eye">
-              <ellipse cx="76" cy="124" rx="20" ry="22" fill="#f8fafc" />
-              <ellipse cx="76" cy="124" rx="20" ry="22" fill="none" stroke="rgba(99,102,241,0.25)" stroke-width="1.5" />
-              <circle :cx="76 + leftPupil.x" :cy="124 + leftPupil.y" r="10" fill="#4338ca" />
-              <circle :cx="76 + leftPupil.x" :cy="124 + leftPupil.y" r="6" fill="#0f172a" />
-              <circle :cx="70 + leftPupil.x * 0.3" :cy="118 + leftPupil.y * 0.3" r="3" fill="#fff" opacity="0.95" />
+              <circle cx="96" cy="100" r="13" fill="#fff" />
+              <circle cx="96" cy="100" r="13" fill="none" stroke="rgba(232,74,63,0.12)" stroke-width="1" />
+              <circle :cx="96 + leftPupil.x" :cy="100 + leftPupil.y" r="6.5" fill="#3d3d3d" />
+              <circle :cx="93 + leftPupil.x * 0.25" :cy="97 + leftPupil.y * 0.25" r="2.2" fill="#fff" />
             </g>
             <g class="yoto-eye">
-              <ellipse cx="144" cy="124" rx="20" ry="22" fill="#f8fafc" />
-              <ellipse cx="144" cy="124" rx="20" ry="22" fill="none" stroke="rgba(99,102,241,0.25)" stroke-width="1.5" />
-              <circle :cx="144 + rightPupil.x" :cy="124 + rightPupil.y" r="10" fill="#4338ca" />
-              <circle :cx="144 + rightPupil.x" :cy="124 + rightPupil.y" r="6" fill="#0f172a" />
-              <circle :cx="138 + rightPupil.x * 0.3" :cy="118 + rightPupil.y * 0.3" r="3" fill="#fff" opacity="0.95" />
+              <circle cx="124" cy="100" r="13" fill="#fff" />
+              <circle cx="124" cy="100" r="13" fill="none" stroke="rgba(232,74,63,0.12)" stroke-width="1" />
+              <circle :cx="124 + rightPupil.x" :cy="100 + rightPupil.y" r="6.5" fill="#3d3d3d" />
+              <circle :cx="121 + rightPupil.x * 0.25" :cy="97 + rightPupil.y * 0.25" r="2.2" fill="#fff" />
             </g>
 
-            <ellipse cx="58" cy="142" rx="12" ry="7" fill="url(#yotoCheek)" />
-            <ellipse cx="162" cy="142" rx="12" ry="7" fill="url(#yotoCheek)" />
+            <ellipse cx="84" cy="112" rx="7" ry="4.5" fill="url(#koiBlush)" />
+            <ellipse cx="136" cy="112" rx="7" ry="4.5" fill="url(#koiBlush)" />
 
             <path
               v-if="!coveringEyes"
-              d="M 84 158 Q 110 176 136 158"
+              d="M 102 116 Q 110 122 118 116"
               fill="none"
-              stroke="rgba(255,255,255,0.72)"
-              stroke-width="4.5"
+              stroke="#d4847a"
+              stroke-width="2.5"
               stroke-linecap="round"
             />
-            <ellipse v-else cx="110" cy="162" rx="8" ry="6" fill="none" stroke="rgba(255,255,255,0.55)" stroke-width="3.5" />
+            <circle v-else cx="110" cy="118" r="3" fill="none" stroke="#d4847a" stroke-width="2" />
           </g>
 
-          <!-- chest badge -->
-          <text x="110" y="98" text-anchor="middle" class="yoto-badge">Y</text>
-
-          <!-- covering hands -->
+          <!-- covering fins -->
           <g class="yoto-hands" :class="{ 'is-covering': coveringEyes }">
             <g class="yoto-hand yoto-hand--left">
-              <ellipse cx="76" cy="124" rx="26" ry="22" fill="url(#yotoHand)" />
-              <ellipse cx="64" cy="112" rx="7" ry="9" fill="url(#yotoHand)" />
-              <ellipse cx="76" cy="108" rx="7" ry="9" fill="url(#yotoHand)" />
-              <ellipse cx="88" cy="112" rx="7" ry="9" fill="url(#yotoHand)" />
+              <ellipse cx="96" cy="100" rx="22" ry="18" fill="url(#koiFin)" opacity="0.95" />
             </g>
             <g class="yoto-hand yoto-hand--right">
-              <ellipse cx="144" cy="124" rx="26" ry="22" fill="url(#yotoHand)" />
-              <ellipse cx="132" cy="112" rx="7" ry="9" fill="url(#yotoHand)" />
-              <ellipse cx="144" cy="108" rx="7" ry="9" fill="url(#yotoHand)" />
-              <ellipse cx="156" cy="112" rx="7" ry="9" fill="url(#yotoHand)" />
+              <ellipse cx="124" cy="100" rx="22" ry="18" fill="url(#koiFin)" opacity="0.95" />
             </g>
           </g>
         </svg>
 
-        <p v-if="hero" class="auth-scene__name">Yoto</p>
-        <p v-else class="auth-scene__hint">Yoto · CrossHub 小助手</p>
+        <p v-if="hero" class="auth-scene__name">小鲤</p>
+        <p v-else class="auth-scene__hint">小鲤 · CrossHub 小助手</p>
       </div>
     </div>
 
@@ -316,14 +326,14 @@ onUnmounted(() => {
 
 .auth-scene__glow {
   position: absolute;
-  inset: 18% 8% 22%;
+  inset: 20% 10% 24%;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(99, 102, 241, 0.28) 0%, transparent 68%);
+  background: radial-gradient(circle, rgba(255, 138, 101, 0.14) 0%, transparent 70%);
   transition: transform 0.35s ease-out, background 0.4s ease;
 }
 
 .auth-scene--shy .auth-scene__glow {
-  background: radial-gradient(circle, rgba(244, 114, 182, 0.22) 0%, transparent 68%);
+  background: radial-gradient(circle, rgba(255, 154, 118, 0.18) 0%, transparent 70%);
 }
 
 .auth-scene__orb {
@@ -333,32 +343,31 @@ onUnmounted(() => {
 }
 
 .auth-scene__orb--1 {
-  top: 8%;
-  left: 4%;
-  width: 14px;
-  height: 14px;
-  background: rgba(56, 189, 248, 0.75);
-  box-shadow: 0 0 24px rgba(56, 189, 248, 0.55);
+  top: 10%;
+  left: 8%;
+  width: 10px;
+  height: 10px;
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.15);
   animation: orb-float 5s ease-in-out infinite;
 }
 
 .auth-scene__orb--2 {
-  top: 18%;
-  right: 0;
-  width: 10px;
-  height: 10px;
-  background: rgba(167, 139, 250, 0.8);
-  box-shadow: 0 0 20px rgba(167, 139, 250, 0.5);
+  top: 22%;
+  right: 6%;
+  width: 6px;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   animation: orb-float 6.5s ease-in-out infinite reverse;
 }
 
 .auth-scene__orb--3 {
-  bottom: 28%;
-  left: 0;
-  width: 8px;
-  height: 8px;
-  background: rgba(129, 140, 248, 0.85);
-  box-shadow: 0 0 16px rgba(129, 140, 248, 0.45);
+  bottom: 30%;
+  left: 6%;
+  width: 5px;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.18);
   animation: orb-float 4.8s ease-in-out infinite;
 }
 
@@ -371,9 +380,8 @@ onUnmounted(() => {
 .auth-scene__ring {
   width: 100%;
   height: 100%;
-  border: 1px dashed rgba(165, 180, 252, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 50%;
-  animation: ring-spin 28s linear infinite;
 }
 
 .auth-scene__mascot-wrap {
@@ -392,20 +400,14 @@ onUnmounted(() => {
 }
 
 .mascot-svg {
-  width: 250px;
+  width: 230px;
   height: auto;
   overflow: visible;
 }
 
-.yoto-antenna {
-  animation: antenna-pulse 2.4s ease-in-out infinite;
-}
-
-.yoto-badge {
-  font-size: 15px;
-  font-weight: 800;
-  letter-spacing: 0.02em;
-  fill: rgba(255, 255, 255, 0.78);
+.koi-tail {
+  transform-origin: 110px 178px;
+  animation: tail-sway 3.5s ease-in-out infinite;
 }
 
 .yoto-arms {
@@ -429,7 +431,7 @@ onUnmounted(() => {
 
 .yoto-hand {
   opacity: 0;
-  transform: translateY(48px);
+  transform: translateY(28px) scale(0.85);
   transition:
     opacity 0.32s ease,
     transform 0.45s cubic-bezier(0.34, 1.45, 0.64, 1);
@@ -449,12 +451,11 @@ onUnmounted(() => {
 }
 
 .auth-scene__name {
-  margin: 10px 0 0;
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: rgba(248, 250, 252, 0.72);
+  margin: 12px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  color: rgba(255, 255, 255, 0.45);
 }
 
 .auth-scene__hint {
@@ -511,6 +512,16 @@ onUnmounted(() => {
   left: -4%;
 }
 
+@keyframes tail-sway {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(4deg);
+  }
+}
+
 @keyframes mascot-float {
   0%,
   100% {
@@ -527,27 +538,7 @@ onUnmounted(() => {
     transform: translateY(0);
   }
   50% {
-    transform: translateY(-8px);
-  }
-}
-
-@keyframes ring-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes antenna-pulse {
-  0%,
-  100% {
-    opacity: 0.75;
-  }
-  50% {
-    opacity: 1;
-    filter: drop-shadow(0 0 10px rgba(56, 189, 248, 0.85));
+    transform: translateY(-6px);
   }
 }
 
@@ -581,19 +572,18 @@ onUnmounted(() => {
 }
 
 .auth-scene--hero .auth-scene__glow {
-  inset: 8% 0 12%;
-  background: radial-gradient(circle, rgba(99, 102, 241, 0.38) 0%, transparent 62%);
+  inset: 10% 2% 14%;
+  background: radial-gradient(circle, rgba(255, 138, 101, 0.18) 0%, transparent 65%);
 }
 
 .auth-scene--hero.auth-scene--shy .auth-scene__glow {
-  background: radial-gradient(circle, rgba(244, 114, 182, 0.28) 0%, transparent 62%);
+  background: radial-gradient(circle, rgba(255, 154, 118, 0.22) 0%, transparent 65%);
 }
 
 @media (prefers-reduced-motion: reduce) {
   .auth-scene__mascot,
   .auth-scene__orb,
-  .auth-scene__ring,
-  .yoto-antenna {
+  .koi-tail {
     animation: none;
   }
 

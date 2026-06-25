@@ -12,25 +12,25 @@
 .portal-page,
 .auth-scroll {
   scrollbar-width: thin;
-  scrollbar-color: rgba(100, 116, 139, 0.35) transparent;
+  scrollbar-color: rgba(161, 161, 170, 0.4) transparent;
 }
 
 .page-scroll-body::-webkit-scrollbar,
 .portal-page::-webkit-scrollbar,
 .auth-scroll::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 .page-scroll-body::-webkit-scrollbar-thumb,
 .portal-page::-webkit-scrollbar-thumb,
 .auth-scroll::-webkit-scrollbar-thumb {
   border-radius: 999px;
-  background: rgba(100, 116, 139, 0.35);
+  background: rgba(161, 161, 170, 0.4);
 }
 
 .page-scroll-body::-webkit-scrollbar-thumb:hover,
 .portal-page::-webkit-scrollbar-thumb:hover,
 .auth-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 116, 139, 0.55);
+  background: rgba(113, 113, 122, 0.6);
 }

@@ -1,0 +1,87 @@
+import { OPS_FEEDBACK_SEED, OUTCOME_MAP } from '@/constants/opsFeedbackDemo'
+
+const STORAGE_KEY = 'crosshub_ops_feedback'
+const SEED_FLAG_KEY = 'crosshub_ops_feedback_seeded'
+
+function todayKey() {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function nowText() {
+  return new Date().toISOString().replace('T', ' ').slice(0, 19)
+}
+
+function loadAll() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+function saveAll(items) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(items))
+}
+
+function ensureSeedFeedback() {
+  if (localStorage.getItem(SEED_FLAG_KEY)) return
+  const date = todayKey()
+  const seeded = OPS_FEEDBACK_SEED.map((item) => ({
+    ...item,
+    date: item.date || date,
+  }))
+  const existing = loadAll()
+  const ids = new Set(existing.map((item) => item.id))
+  const merged = [...existing, ...seeded.filter((item) => !ids.has(item.id))]
+  saveAll(merged)
+  localStorage.setItem(SEED_FLAG_KEY, '1')
+}
+
+export function fetchOpsFeedback(options = {}) {
+  ensureSeedFeedback()
+  let items = loadAll()
+  const date = options.date || todayKey()
+
+  if (options.date !== 'all') {
+    items = items.filter((item) => item.date === date)
+  }
+
+  if (options.employeeId) {
+    items = items.filter((item) => item.employeeId === options.employeeId)
+  }
+
+  return items.sort((a, b) => String(b.submittedAt).localeCompare(String(a.submittedAt)))
+}
+
+export function submitOpsFeedback(payload) {
+  ensureSeedFeedback()
+  const items = loadAll()
+  const outcome = OUTCOME_MAP[payload.outcome] || OUTCOME_MAP.in_progress
+
+  const row = {
+    id: `fb_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    taskId: payload.taskId,
+    employeeId: payload.employeeId,
+    employeeName: payload.employeeName,
+    employeeRole: payload.employeeRole || '',
+    platform: payload.platform,
+    platformKey: payload.platformKey,
+    taskTitle: payload.taskTitle,
+    category: payload.category || '',
+    outcome: payload.outcome || 'in_progress',
+    outcomeLabel: outcome.label,
+    feedback: (payload.feedback || '').trim(),
+    storeName: payload.storeName || '—',
+    date: todayKey(),
+    submittedAt: nowText(),
+  }
+
+  items.unshift(row)
+  saveAll(items)
+  return { success: true, data: row }
+}
+
+export function getFeedbackByTaskId(taskId) {
+  return fetchOpsFeedback({ date: 'all' }).find((item) => item.taskId === taskId)
+}

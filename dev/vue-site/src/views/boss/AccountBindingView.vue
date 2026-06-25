@@ -1,127 +1,250 @@
 <script setup>
-import { ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, onMounted, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Delete, Plus, Refresh } from '@element-plus/icons-vue'
+import { deletePlatformStore, fetchAllPlatformStores } from '@/api/platformAccounts'
 import PageHeader from '@/components/common/PageHeader.vue'
 import PageScroll from '@/components/common/PageScroll.vue'
-import PlatformStorePanel from '@/components/accounts/PlatformStorePanel.vue'
+import BindStoreDialog from '@/components/accounts/BindStoreDialog.vue'
 
-const temuPanel = ref(null)
-const aliexpressPanel = ref(null)
-const panel1688 = ref(null)
-const shopifyPanel = ref(null)
-const wordpressPanel = ref(null)
-const refreshing = ref(false)
+const PLATFORM_META = {
+  temu: { label: 'Temu', type: 'warning' },
+  aliexpress: { label: 'AliExpress', type: 'danger' },
+  amazon: { label: 'Amazon', type: '' },
+  walmart: { label: 'Walmart', type: 'primary' },
+  pdd: { label: '拼多多', type: 'danger' },
+  douyin: { label: '抖音', type: '' },
+  channels: { label: '视频号', type: 'success' },
+  '1688': { label: '1688', type: 'warning' },
+  shopify: { label: 'Shopify', type: 'success' },
+  wordpress: { label: 'WordPress', type: 'info' },
+}
 
-async function refreshAll() {
-  refreshing.value = true
+const FILTER_PLATFORMS = [
+  { value: 'temu', label: 'Temu' },
+  { value: 'aliexpress', label: 'AliExpress' },
+  { value: 'amazon', label: 'Amazon' },
+  { value: 'walmart', label: 'Walmart' },
+  { value: 'pdd', label: '拼多多' },
+  { value: 'douyin', label: '抖音' },
+  { value: 'channels', label: '视频号' },
+  { value: '1688', label: '1688' },
+  { value: 'shopify', label: 'Shopify' },
+  { value: 'wordpress', label: 'WordPress' },
+]
+
+const loading = ref(false)
+const allStores = ref([])
+const activePlatform = ref('all')
+const bindDialogVisible = ref(false)
+const bindDefaultPlatform = ref('temu')
+
+const platformCounts = computed(() => {
+  const counts = {}
+  for (const store of allStores.value) {
+    counts[store.platform] = (counts[store.platform] || 0) + 1
+  }
+  return counts
+})
+
+const filteredStores = computed(() => {
+  if (activePlatform.value === 'all') return allStores.value
+  return allStores.value.filter((store) => store.platform === activePlatform.value)
+})
+
+function platformLabel(platform) {
+  return PLATFORM_META[platform]?.label || platform
+}
+
+function platformTagType(platform) {
+  return PLATFORM_META[platform]?.type || 'info'
+}
+
+function openBindDialog(platform = 'temu') {
+  bindDefaultPlatform.value = platform === 'all' ? 'temu' : platform
+  bindDialogVisible.value = true
+}
+
+async function loadStores() {
+  loading.value = true
   try {
-    await Promise.all([
-      temuPanel.value?.loadStores?.(),
-      aliexpressPanel.value?.loadStores?.(),
-      panel1688.value?.loadStores?.(),
-      shopifyPanel.value?.loadStores?.(),
-      wordpressPanel.value?.loadStores?.(),
-    ])
-    ElMessage.success('已刷新店铺列表')
+    const res = await fetchAllPlatformStores()
+    allStores.value = res.data || []
   } catch {
-    ElMessage.error('刷新失败，请稍后重试')
+    allStores.value = []
+    ElMessage.error('加载失败')
   } finally {
-    refreshing.value = false
+    loading.value = false
   }
 }
+
+async function removeStore(row) {
+  try {
+    await ElMessageBox.confirm(`确定解除「${row.storeName}」的绑定？`, '解除绑定', {
+      type: 'warning',
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+
+  loading.value = true
+  try {
+    await deletePlatformStore(row.id)
+    await loadStores()
+    ElMessage.success('已解除绑定')
+  } catch (err) {
+    ElMessage.error(err.message || '操作失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(loadStores)
 </script>
 
 <template>
   <PageScroll>
     <template #header>
-      <PageHeader title="平台账户绑定">
+      <PageHeader
+        title="账户绑定"
+        description="绑定各平台店铺后，对应运营模块将自动读取"
+      >
         <template #actions>
-          <el-button :loading="refreshing" @click="refreshAll">刷新列表</el-button>
+          <el-button :icon="Refresh" :loading="loading" @click="loadStores">刷新</el-button>
+          <el-button type="primary" :icon="Plus" @click="openBindDialog(activePlatform)">
+            绑定店铺
+          </el-button>
         </template>
       </PageHeader>
     </template>
 
-    <el-divider content-position="left">跨境平台</el-divider>
+    <div class="filter-bar">
+      <button
+        type="button"
+        class="filter-chip"
+        :class="{ 'is-active': activePlatform === 'all' }"
+        @click="activePlatform = 'all'"
+      >
+        全部
+        <span v-if="allStores.length" class="filter-chip__count">{{ allStores.length }}</span>
+      </button>
+      <button
+        v-for="item in FILTER_PLATFORMS"
+        :key="item.value"
+        type="button"
+        class="filter-chip"
+        :class="{ 'is-active': activePlatform === item.value }"
+        @click="activePlatform = item.value"
+      >
+        {{ item.label }}
+        <span v-if="platformCounts[item.value]" class="filter-chip__count">
+          {{ platformCounts[item.value] }}
+        </span>
+      </button>
+    </div>
 
-    <el-row :gutter="16" class="panel-row">
-      <el-col :xs="24" :lg="12">
-        <PlatformStorePanel
-          ref="temuPanel"
-          platform="temu"
-          label="Temu"
-          desc="支持绑定多个 Temu 全托管 / 半托管店铺，请为每个店铺设置便于识别的名称"
-          tag-type="warning"
-        />
-      </el-col>
-      <el-col :xs="24" :lg="12">
-        <PlatformStorePanel
-          ref="aliexpressPanel"
-          platform="aliexpress"
-          label="AliExpress"
-          desc="支持绑定多个速卖通店铺，店铺名称用于系统内区分不同站点或品牌店"
-          tag-type="danger"
-        />
-      </el-col>
-    </el-row>
+    <div v-loading="loading" class="store-card">
+      <el-table
+        v-if="filteredStores.length"
+        :data="filteredStores"
+        size="small"
+        stripe
+        class="store-table"
+      >
+        <el-table-column label="平台" width="110">
+          <template #default="{ row }">
+            <el-tag :type="platformTagType(row.platform)" size="small" effect="plain">
+              {{ platformLabel(row.platform) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="storeName" label="店铺名称" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="account" label="登录账号" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="boundAt" label="绑定时间" width="170" />
+        <el-table-column label="操作" width="80" align="center" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="danger" :icon="Delete" @click="removeStore(row)">
+              解除
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
 
-    <el-divider content-position="left">供应链采购</el-divider>
-    <el-text type="info" size="small" class="section-desc">
-      1688 采购账号用于管理供应商订单、付款与入库跟进，可与 Temu / 速卖通备货需求关联
-    </el-text>
+      <el-empty v-else description="暂无绑定店铺" :image-size="80">
+        <el-button type="primary" :icon="Plus" @click="openBindDialog(activePlatform)">
+          绑定第一个店铺
+        </el-button>
+      </el-empty>
+    </div>
 
-    <el-row :gutter="16" class="panel-row">
-      <el-col :xs="24" :lg="12">
-        <PlatformStorePanel
-          ref="panel1688"
-          platform="1688"
-          label="1688"
-          desc="支持绑定多个 1688 采购账号，用于区分主采购号与辅料/备件采购号"
-          tag-type="warning"
-        />
-      </el-col>
-    </el-row>
-
-    <section class="dtc-section">
-      <el-divider content-position="left">独立站运营</el-divider>
-      <el-text type="info" size="small" class="section-desc">
-        Shopify 与 WordPress 均属于独立站运营，可在此分别绑定电商店铺与内容站点账号
-      </el-text>
-
-      <el-row :gutter="16" class="panel-row">
-        <el-col :xs="24" :lg="12">
-          <PlatformStorePanel
-            ref="shopifyPanel"
-            platform="shopify"
-            label="Shopify"
-            desc="独立站电商店铺，用于同步订单、商品与流量数据（如亿拓户外官网、欧洲站）"
-            tag-type="success"
-          />
-        </el-col>
-        <el-col :xs="24" :lg="12">
-          <PlatformStorePanel
-            ref="wordpressPanel"
-            platform="wordpress"
-            label="WordPress"
-            desc="独立站内容站点，用于博客、品牌页或 WooCommerce 店铺管理"
-            tag-type="primary"
-          />
-        </el-col>
-      </el-row>
-    </section>
+    <BindStoreDialog
+      v-model:visible="bindDialogVisible"
+      :default-platform="bindDefaultPlatform"
+      @success="loadStores"
+    />
   </PageScroll>
 </template>
 
 <style scoped>
-.panel-row {
-  align-items: stretch;
-}
-
-.dtc-section {
-  margin-top: 8px;
-}
-
-.section-desc {
-  display: block;
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 16px;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  background: var(--el-bg-color);
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.filter-chip:hover {
+  border-color: var(--el-color-primary-light-5);
+  color: var(--el-color-primary);
+}
+
+.filter-chip.is-active {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+  font-weight: 600;
+}
+
+.filter-chip__count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 10px;
+  background: var(--el-fill-color);
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  text-align: center;
+}
+
+.filter-chip.is-active .filter-chip__count {
+  background: var(--el-color-primary-light-7);
+  color: var(--el-color-primary);
+}
+
+.store-card {
+  padding: 4px 0;
+  border-radius: 8px;
+  background: var(--el-bg-color);
+}
+
+.store-table {
+  border-radius: 8px;
 }
 </style>

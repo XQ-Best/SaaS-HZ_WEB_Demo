@@ -5,17 +5,24 @@ import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import {
   loadAmazonDailyWorkflow,
+  loadAmazonBossInsights,
+  refreshAmazonBossInsights,
   replyBuyerMessage,
   handleReview,
   acknowledgeCase,
+  shipOutboundOrder,
 } from '@/api/amazon'
 import { fetchAmazonStores } from '@/api/platformAccounts'
 import { scopeStores } from '@/utils/scope'
 import { useStoreAssignees } from '@/composables/useStoreAssignees'
 import { buildAmazonDailyChecklist } from '@/utils/amazon'
+import { summarizeTopProducts, summarizeOutboundOrders } from '@/utils/amazonBoss'
 import PageHeader from '@/components/common/PageHeader.vue'
 import PageScroll from '@/components/common/PageScroll.vue'
 import AmazonDailyOverview from '@/components/amazon/AmazonDailyOverview.vue'
+import AmazonBossOverview from '@/components/amazon/AmazonBossOverview.vue'
+import AmazonProductsPanel from '@/components/amazon/AmazonProductsPanel.vue'
+import AmazonOutboundPanel from '@/components/amazon/AmazonOutboundPanel.vue'
 import AmazonBuyerMessagesPanel from '@/components/amazon/AmazonBuyerMessagesPanel.vue'
 import AmazonAccountHealthPanel from '@/components/amazon/AmazonAccountHealthPanel.vue'
 import AmazonReviewsPanel from '@/components/amazon/AmazonReviewsPanel.vue'
@@ -28,16 +35,24 @@ const auth = useAuthStore()
 const { assigneeMap, loadAssignees, enrichItems } = useStoreAssignees()
 const router = useRouter()
 
-const activeTab = ref('dashboard')
+const activeTab = ref(auth.isBoss ? 'products' : 'dashboard')
 const selectedStoreId = ref('all')
 const amazonStores = ref([])
 const workflow = ref(emptyWorkflow())
+const bossProducts = ref([])
+const outboundOrders = ref([])
 const syncedAt = ref('')
+const bossSyncedAt = ref('')
 const loadingStores = ref(false)
 const loading = ref(false)
+const loadingBoss = ref(false)
 
 const messagesPanel = ref(null)
 const reviewsPanel = ref(null)
+const productsPanel = ref(null)
+const outboundPanel = ref(null)
+const productsFilter = ref('all')
+const outboundFilter = ref('pending')
 
 const storeNameMap = computed(() =>
   Object.fromEntries(amazonStores.value.map((s) => [s.id, s.storeName])),
@@ -70,6 +85,12 @@ function filterByStore(items) {
   return enrichItems(items.filter((i) => i.storeId === selectedStoreId.value))
 }
 
+const filteredProducts = computed(() => filterByStore(bossProducts.value))
+const filteredOutbound = computed(() => filterByStore(outboundOrders.value))
+
+const bossProductSummary = computed(() => summarizeTopProducts(filteredProducts.value, 20))
+const outboundSummary = computed(() => summarizeOutboundOrders(filteredOutbound.value))
+
 const filtered = computed(() => ({
   buyerMessages: filterByStore(workflow.value.buyerMessages),
   accountMetrics: filterByStore(workflow.value.accountMetrics),
@@ -85,6 +106,8 @@ const checklist = computed(() => buildAmazonDailyChecklist(filtered.value))
 const tabBadges = computed(() => {
   const map = Object.fromEntries(checklist.value.map((s) => [s.tab, s.count]))
   return {
+    products: bossProductSummary.value.highAcosCount,
+    outbound: outboundSummary.value.actionRequired,
     dashboard: 0,
     messages: map.messages || 0,
     account: map.account || 0,
@@ -109,6 +132,31 @@ function applyWorkflowData(data) {
   syncedAt.value = data.syncedAt || ''
 }
 
+function applyBossData(data) {
+  bossProducts.value = data.products || []
+  outboundOrders.value = data.outboundOrders || []
+  bossSyncedAt.value = data.syncedAt || ''
+}
+
+async function syncBossInsights(refresh = false) {
+  if (!amazonStores.value.length) {
+    applyBossData({ products: [], outboundOrders: [], syncedAt: '' })
+    return
+  }
+  loadingBoss.value = true
+  try {
+    const res = refresh
+      ? await refreshAmazonBossInsights(amazonStores.value, { refresh: true })
+      : loadAmazonBossInsights(amazonStores.value)
+    applyBossData(res.data)
+    if (refresh) ElMessage.success(res.message || '已刷新产品数据')
+  } catch (err) {
+    ElMessage.error(err.message || '产品数据加载失败')
+  } finally {
+    loadingBoss.value = false
+  }
+}
+
 async function syncWorkflow() {
   if (!amazonStores.value.length) {
     applyWorkflowData(emptyWorkflow())
@@ -131,9 +179,10 @@ async function loadModule() {
     const res = await fetchAmazonStores()
     amazonStores.value = scopeStores(res.data || [], auth)
     if (amazonStores.value.length) {
-      await syncWorkflow()
+      await Promise.all([syncWorkflow(), syncBossInsights(false)])
     } else {
       applyWorkflowData(emptyWorkflow())
+      applyBossData({ products: [], outboundOrders: [], syncedAt: '' })
     }
   } catch {
     amazonStores.value = []
@@ -147,8 +196,31 @@ function goToAccountBinding() {
   router.push(auth.isBoss ? '/boss/accounts' : '/employee/dashboard')
 }
 
-function handleNavigate(tab) {
-  activeTab.value = tab
+function handleNavigate(target) {
+  if (target.startsWith('products')) {
+    activeTab.value = 'products'
+    productsFilter.value = target === 'products:high-acos' ? 'high-acos' : 'all'
+    return
+  }
+  if (target.startsWith('outbound')) {
+    activeTab.value = 'outbound'
+    outboundFilter.value = target === 'outbound:packed' ? 'packed' : 'pending'
+    return
+  }
+  activeTab.value = target
+}
+
+async function onShipOutbound(payload) {
+  try {
+    const res = shipOutboundOrder(payload.id, payload)
+    const idx = outboundOrders.value.findIndex((o) => o.id === payload.id)
+    if (idx !== -1) outboundOrders.value[idx] = res.data
+    ElMessage.success('已标记发货')
+  } catch (err) {
+    ElMessage.error(err.message || '操作失败')
+  } finally {
+    outboundPanel.value?.finishShip?.()
+  }
 }
 
 async function onReplyMessage(payload) {
@@ -235,7 +307,56 @@ onActivated(loadModule)
     </el-empty>
 
     <template v-else-if="amazonStores.length">
+      <AmazonBossOverview
+        v-if="auth.isBoss"
+        :products="filteredProducts"
+        :outbound-orders="filteredOutbound"
+        :stores="overviewStores"
+        :assignee-map="assigneeMap"
+        :show-store-list="showStoreList"
+        @navigate="handleNavigate"
+      />
+
       <el-tabs v-model="activeTab" class="module-tabs">
+        <el-tab-pane v-if="auth.isBoss" name="products">
+          <template #label>
+            <span>产品 TOP20</span>
+            <el-badge v-if="tabBadges.products" :value="tabBadges.products" class="tab-badge" />
+          </template>
+          <div class="tab-panel">
+            <AmazonProductsPanel
+              ref="productsPanel"
+              :products="filteredProducts"
+              :synced-at="bossSyncedAt"
+              :loading="loadingBoss"
+              :show-store-column="showStoreColumn"
+              :store-name-map="storeNameMap"
+              :initial-filter="productsFilter"
+              @refresh="syncBossInsights(true)"
+            />
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane name="outbound">
+          <template #label>
+            <span>订单发货</span>
+            <el-badge v-if="tabBadges.outbound" :value="tabBadges.outbound" class="tab-badge" />
+          </template>
+          <div class="tab-panel">
+            <AmazonOutboundPanel
+              ref="outboundPanel"
+              :orders="filteredOutbound"
+              :synced-at="bossSyncedAt"
+              :loading="loadingBoss"
+              :show-store-column="showStoreColumn"
+              :store-name-map="storeNameMap"
+              :initial-filter="outboundFilter"
+              @refresh="syncBossInsights(true)"
+              @ship="onShipOutbound"
+            />
+          </div>
+        </el-tab-pane>
+
         <el-tab-pane name="dashboard">
           <template #label>
             <span>今日工作台</span>

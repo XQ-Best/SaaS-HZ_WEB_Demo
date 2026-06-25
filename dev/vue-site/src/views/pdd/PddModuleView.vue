@@ -1,0 +1,165 @@
+<script setup>
+import { fetchPddStores } from '@/api/platformAccounts'
+import {
+  crawlPddIssues,
+  fetchTodayPddOrders,
+  loadPddIssues,
+  resolvePddIssue,
+} from '@/api/domesticPlatforms'
+import { PDD_ISSUE_TYPES } from '@/constants/pddDemo'
+import { useDomesticModule } from '@/composables/useDomesticModule'
+import PageHeader from '@/components/common/PageHeader.vue'
+import PageScroll from '@/components/common/PageScroll.vue'
+import DomesticBossOverview from '@/components/domestic/DomesticBossOverview.vue'
+import DomesticOrdersPanel from '@/components/domestic/DomesticOrdersPanel.vue'
+import DomesticIssuesPanel from '@/components/domestic/DomesticIssuesPanel.vue'
+
+const {
+  auth,
+  assigneeMap,
+  activeTab,
+  selectedStoreId,
+  stores,
+  ordersSyncedAt,
+  issuesSyncedAt,
+  loadingStores,
+  loadingOrders,
+  loadingIssues,
+  issuesPanel,
+  issuesFilter,
+  storeNameMap,
+  showStoreColumn,
+  showStoreList,
+  overviewStores,
+  filteredOrders,
+  filteredIssues,
+  pendingOrderCount,
+  pendingIssueCount,
+  syncTodayOrders,
+  syncIssues,
+  handleResolveIssue,
+  goToAccountBinding,
+  handleOverviewNavigate,
+} = useDomesticModule({
+  fetchStores: fetchPddStores,
+  fetchOrders: fetchTodayPddOrders,
+  loadIssues: loadPddIssues,
+  crawlIssues: crawlPddIssues,
+  resolveIssue: resolvePddIssue,
+  issueTypeMap: PDD_ISSUE_TYPES,
+})
+</script>
+
+<template>
+  <PageScroll>
+    <template #header>
+      <div v-if="stores.length" class="page-toolbar">
+        <el-radio-group v-model="selectedStoreId" size="small">
+          <el-radio-button value="all">全部店铺</el-radio-button>
+          <el-radio-button v-for="store in stores" :key="store.id" :value="store.id">
+            {{ store.storeName }}
+          </el-radio-button>
+        </el-radio-group>
+      </div>
+
+      <PageHeader
+        v-else-if="!stores.length && !auth.isBoss"
+        title="拼多多运营"
+        :description="`${auth.employee.name} · 订单处理与活动跟进`"
+      />
+    </template>
+
+    <el-empty
+      v-if="!loadingStores && !stores.length"
+      description="暂无可见的拼多多店铺"
+      :image-size="96"
+    >
+      <el-text type="info" size="small">
+        {{ auth.isBoss ? '请先在「账户绑定」中绑定拼多多店铺' : '请联系企业管理员在员工绑定中分配负责店铺' }}
+      </el-text>
+      <el-button v-if="auth.isBoss" type="primary" style="margin-top: 16px" @click="goToAccountBinding">
+        前往账户绑定
+      </el-button>
+    </el-empty>
+
+    <template v-else-if="stores.length">
+      <DomesticBossOverview
+        v-if="auth.isBoss"
+        :orders="filteredOrders"
+        :issues="filteredIssues"
+        :stores="overviewStores"
+        :assignee-map="assigneeMap"
+        :show-store-list="showStoreList"
+        issues-label="活动预警"
+        @navigate="handleOverviewNavigate"
+      />
+
+      <el-tabs v-model="activeTab" class="module-tabs">
+        <el-tab-pane name="orders">
+          <template #label>
+            <span>今日订单</span>
+            <el-badge v-if="pendingOrderCount" :value="pendingOrderCount" class="tab-badge" />
+          </template>
+          <div class="tab-panel">
+            <DomesticOrdersPanel
+              :orders="filteredOrders"
+              :synced-at="ordersSyncedAt"
+              :loading="loadingOrders"
+              :show-store-column="showStoreColumn"
+              :store-name-map="storeNameMap"
+              orders-description="百亿补贴与商城订单"
+              @refresh="syncTodayOrders(true)"
+            />
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane name="issues">
+          <template #label>
+            <span>活动预警</span>
+            <el-badge v-if="pendingIssueCount" :value="pendingIssueCount" class="tab-badge" />
+          </template>
+          <div class="tab-panel">
+            <DomesticIssuesPanel
+              ref="issuesPanel"
+              :issues="filteredIssues"
+              :synced-at="issuesSyncedAt"
+              :loading="loadingIssues"
+              :show-store-column="showStoreColumn"
+              :store-name-map="storeNameMap"
+              :initial-filter="issuesFilter"
+              issues-title="活动预警"
+              issues-description="拼团、价格与库存相关待跟进事项"
+              @refresh="syncIssues(true)"
+              @resolve="handleResolveIssue"
+            />
+          </div>
+        </el-tab-pane>
+      </el-tabs>
+    </template>
+  </PageScroll>
+</template>
+
+<style scoped>
+.page-toolbar {
+  margin-bottom: 16px;
+}
+
+.module-tabs {
+  margin-top: 20px;
+}
+
+.tab-panel {
+  padding: 16px 0 4px;
+}
+
+.tab-badge {
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.tab-badge :deep(.el-badge__content) {
+  position: relative;
+  transform: none;
+  vertical-align: middle;
+}
+</style>

@@ -1,12 +1,20 @@
 import { TEMU_RESTOCK_STATUS_LABELS } from '@/constants/temuOps'
 import { DTC_ORDER_STATUSES } from '@/constants/dtcOrders'
 import { PURCHASE_ORDER_STATUSES, SUPPLIER_ALERT_TYPES } from '@/constants/alibaba1688'
+import { buildDomesticPlatformSection } from '@/utils/domesticPlatform'
+import { PDD_ISSUE_TYPES } from '@/constants/pddDemo'
+import { DOUYIN_ISSUE_TYPES } from '@/constants/douyinDemo'
+import { CHANNELS_ISSUE_TYPES } from '@/constants/channelsDemo'
 import { attachAssignee, buildStoreAssigneeMap, resolveStoreAssignee } from '@/utils/storeAssignment'
 import { formatMoneyDecimal } from '@/utils/format'
 
 const JIT_UNSHIPPED = new Set(['待发货', '待揽收'])
 const WAREHOUSE_UNSHIPPED = new Set(['待出库'])
 const WAREHOUSE_SHIPPED = new Set(['已出库', '配送中', '已签收'])
+const WFS_PENDING = new Set(['待拣货', '待发货'])
+const WFS_SHIPPED = new Set(['已发货'])
+const SELLER_PENDING = new Set(['待确认', '待发货'])
+const SELLER_SHIPPED = new Set(['已发货'])
 
 function todayKey() {
   return new Date().toISOString().slice(0, 10)
@@ -243,6 +251,125 @@ function buildAliExpressSection({ orders, violations, stores }, storeNameMap, as
     todayViolations,
     pendingViolations,
     route: '/boss/aliexpress',
+  }
+}
+
+function buildWalmartSection({ orders, issues, stores }, storeNameMap, assigneeMap) {
+  const wfsOrders = orders.filter((o) => o.fulfillmentType === 'wfs')
+  const sellerOrders = orders.filter((o) => o.fulfillmentType === 'seller')
+
+  const mapWfs = (o, extra) =>
+    attachAssignee(
+      withStoreName(
+        {
+          storeId: o.storeId,
+          orderNo: o.orderNo,
+          productName: o.productName,
+          sku: o.sku,
+          status: o.status,
+          shipDeadline: o.shipDeadline,
+          ...extra,
+        },
+        storeNameMap,
+      ),
+      o.storeId,
+      assigneeMap,
+    )
+
+  const wfsPending = wfsOrders
+    .filter((o) => WFS_PENDING.has(o.status))
+    .map((o) => mapWfs(o, { isShipped: false }))
+
+  const wfsShipped = wfsOrders
+    .filter((o) => WFS_SHIPPED.has(o.status))
+    .map((o) => mapWfs(o, { isShipped: true }))
+
+  const mapSeller = (o, extra) =>
+    attachAssignee(
+      withStoreName(
+        {
+          storeId: o.storeId,
+          orderNo: o.orderNo,
+          productName: o.productName,
+          sku: o.sku,
+          status: o.status,
+          shipDeadline: o.shipDeadline,
+          ...extra,
+        },
+        storeNameMap,
+      ),
+      o.storeId,
+      assigneeMap,
+    )
+
+  const sellerPending = sellerOrders
+    .filter((o) => SELLER_PENDING.has(o.status))
+    .map((o) => mapSeller(o, { isShipped: false }))
+
+  const sellerShipped = sellerOrders
+    .filter((o) => SELLER_SHIPPED.has(o.status))
+    .map((o) => mapSeller(o, { isShipped: true }))
+
+  const openIssues = issues
+    .filter((item) => !item.resolved)
+    .map((item) =>
+      attachAssignee(
+        withStoreName(
+          {
+            storeId: item.storeId,
+            id: item.id,
+            typeLabel: item.typeLabel || item.type,
+            sku: item.sku,
+            productName: item.productName,
+            detail: item.detail,
+            severity: item.severity,
+            isResolved: item.resolved,
+          },
+          storeNameMap,
+        ),
+        item.storeId,
+        assigneeMap,
+      ),
+    )
+
+  const storeSummaries = mapStoreSummaries(stores, assigneeMap)
+
+  const storeGroups = storeSummaries.map((summary) => {
+    const sid = summary.storeId
+    const storeWfsPending = wfsPending.filter((item) => item.storeId === sid)
+    const storeWfsShipped = wfsShipped.filter((item) => item.storeId === sid)
+    const storeSellerPending = sellerPending.filter((item) => item.storeId === sid)
+    const storeSellerShipped = sellerShipped.filter((item) => item.storeId === sid)
+    const storeIssues = openIssues.filter((item) => item.storeId === sid)
+    return {
+      ...summary,
+      issueCount: storeWfsPending.length + storeSellerPending.length + storeIssues.length,
+      wfsPending: storeWfsPending,
+      wfsShipped: storeWfsShipped,
+      sellerPending: storeSellerPending,
+      sellerShipped: storeSellerShipped,
+      openListingIssues: storeIssues,
+    }
+  })
+
+  return {
+    id: 'walmart',
+    name: 'Walmart',
+    bound: orders.length > 0 || issues.length > 0,
+    issueCount: wfsPending.length + sellerPending.length + openIssues.length,
+    storeSummaries,
+    storeGroups,
+    wfsPending,
+    wfsShipped,
+    wfsPendingCount: wfsPending.length,
+    wfsShippedCount: wfsShipped.length,
+    sellerPending,
+    sellerShipped,
+    sellerPendingCount: sellerPending.length,
+    sellerShippedCount: sellerShipped.length,
+    openListingIssues: openIssues,
+    openListingCount: openIssues.length,
+    route: '/boss/walmart',
   }
 }
 
@@ -588,12 +715,31 @@ function build1688Section({ purchaseOrders, supplierAlerts, stores }, storeNameM
 }
 
 export function buildOperationsOverview(payload) {
-  const { temu, aliexpress, amazon, dtc, alibaba1688, storeNameMaps, employees } = payload
+  const { temu, aliexpress, walmart, pdd, douyin, channels, amazon, dtc, alibaba1688, storeNameMaps, employees } = payload
   const assigneeMap = buildStoreAssigneeMap(employees)
 
   const platforms = [
     buildTemuSection(temu, storeNameMaps.temu, assigneeMap),
     buildAliExpressSection(aliexpress, storeNameMaps.aliexpress, assigneeMap),
+    buildWalmartSection(walmart, storeNameMaps.walmart, assigneeMap),
+    buildDomesticPlatformSection(
+      { id: 'pdd', name: '拼多多', route: '/boss/pdd', issueTypeMap: PDD_ISSUE_TYPES },
+      pdd,
+      storeNameMaps.pdd,
+      assigneeMap,
+    ),
+    buildDomesticPlatformSection(
+      { id: 'douyin', name: '抖音', route: '/boss/douyin', issueTypeMap: DOUYIN_ISSUE_TYPES },
+      douyin,
+      storeNameMaps.douyin,
+      assigneeMap,
+    ),
+    buildDomesticPlatformSection(
+      { id: 'channels', name: '视频号', route: '/boss/channels', issueTypeMap: CHANNELS_ISSUE_TYPES },
+      channels,
+      storeNameMaps.channels,
+      assigneeMap,
+    ),
     buildAmazonSection(amazon, storeNameMaps.amazon, assigneeMap),
     build1688Section(alibaba1688, storeNameMaps['1688'], assigneeMap),
     buildDtcSection(dtc, storeNameMaps.dtc, assigneeMap),

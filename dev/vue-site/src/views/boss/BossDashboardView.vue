@@ -6,6 +6,7 @@ import { loadOperationsOverview } from '@/api/operationsOverview'
 import OperationsSummaryHeader from '@/components/dashboard/OperationsSummaryHeader.vue'
 import OperationsIssuesPanel from '@/components/dashboard/OperationsIssuesPanel.vue'
 import OperationsTasksPanel from '@/components/dashboard/OperationsTasksPanel.vue'
+import DailyOpsReportPanel from '@/components/dashboard/DailyOpsReportPanel.vue'
 import PageScroll from '@/components/common/PageScroll.vue'
 
 const auth = useAuthStore()
@@ -23,6 +24,7 @@ const overview = computed(() => {
 
 const platformSales = computed(() => context.value?.platformSales || [])
 const tasks = computed(() => context.value?.tasks || [])
+const dailyReport = computed(() => context.value?.dailyReport || null)
 
 async function refresh() {
   loading.value = true
@@ -56,6 +58,8 @@ onMounted(refresh)
         :platform-sales="platformSales"
         :tasks="tasks"
       />
+
+      <DailyOpsReportPanel :report="dailyReport" :loading="loading" />
 
       <OperationsIssuesPanel :overview="overview" />
 

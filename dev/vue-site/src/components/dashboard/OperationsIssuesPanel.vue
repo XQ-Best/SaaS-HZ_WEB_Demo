@@ -21,6 +21,10 @@ const platforms = computed(() => props.overview?.platforms || [])
 const platformRouteMap = {
   temu: 'temu',
   aliexpress: 'aliexpress',
+  walmart: 'walmart',
+  pdd: 'pdd',
+  douyin: 'douyin',
+  channels: 'channels',
   amazon: 'amazon',
   '1688': '1688',
   dtc: 'dtc',
@@ -80,6 +84,37 @@ function aliexpressSections(store) {
       title: `当日违规申诉（${store.todayViolations.length}）`,
       type: 'danger',
       rows: store.todayViolations,
+    })
+  }
+  return sections
+}
+
+function walmartSections(store) {
+  const sections = []
+  const wfs = [...(store.wfsPending || []), ...(store.wfsShipped || [])]
+  if (wfs.length) {
+    sections.push({
+      key: 'wfs',
+      title: `WFS 发货（待处理 ${store.wfsPending?.length || 0}）`,
+      type: store.wfsPending?.length ? 'danger' : 'success',
+      rows: wfs,
+    })
+  }
+  const seller = [...(store.sellerPending || []), ...(store.sellerShipped || [])]
+  if (seller.length) {
+    sections.push({
+      key: 'seller',
+      title: `自发货（待处理 ${store.sellerPending?.length || 0}）`,
+      type: store.sellerPending?.length ? 'warning' : 'success',
+      rows: seller,
+    })
+  }
+  if (store.openListingIssues?.length) {
+    sections.push({
+      key: 'listings',
+      title: `Listing 问题（${store.openListingIssues.length}）`,
+      type: 'danger',
+      rows: store.openListingIssues,
     })
   }
   return sections
@@ -185,9 +220,33 @@ function alibaba1688Sections(store) {
   return sections
 }
 
+function domesticSections(store) {
+  const sections = []
+  const orders = [...(store.pendingOrders || []), ...(store.shippedOrders || [])]
+  if (orders.length) {
+    sections.push({
+      key: 'orders',
+      title: `今日订单（待处理 ${store.pendingOrders?.length || 0}）`,
+      type: store.pendingOrders?.length ? 'warning' : 'success',
+      rows: orders,
+    })
+  }
+  if (store.openIssues?.length) {
+    sections.push({
+      key: 'issues',
+      title: `运营预警（${store.openIssues.length}）`,
+      type: 'danger',
+      rows: store.openIssues,
+    })
+  }
+  return sections
+}
+
 function storeSections(platform, store) {
   if (platform.id === 'temu') return temuSections(store)
   if (platform.id === 'aliexpress') return aliexpressSections(store)
+  if (platform.id === 'walmart') return walmartSections(store)
+  if (['pdd', 'douyin', 'channels'].includes(platform.id)) return domesticSections(store)
   if (platform.id === 'amazon') return amazonSections(store)
   if (platform.id === '1688') return alibaba1688Sections(store)
   if (platform.id === 'dtc') return dtcSections(store)
@@ -420,6 +479,95 @@ watch(() => props.overview, initFromOverview, { immediate: true })
                       </el-tag>
                     </template>
                   </el-table-column>
+                </el-table>
+
+                <!-- Walmart WFS -->
+                <el-table
+                  v-else-if="platform.id === 'walmart' && section.key === 'wfs'"
+                  :data="section.rows"
+                  size="small"
+                  stripe
+                >
+                  <el-table-column prop="orderNo" label="订单号" min-width="140" />
+                  <AssigneeTableColumn width="90" />
+                  <el-table-column prop="productName" label="商品" min-width="130" show-overflow-tooltip />
+                  <el-table-column prop="shipDeadline" label="发货截止" width="150" />
+                  <el-table-column label="发货" width="90" align="center">
+                    <template #default="{ row }">
+                      <el-tag :type="row.isShipped ? 'success' : 'danger'" size="small">
+                        {{ row.isShipped ? '已发' : '未发' }}
+                      </el-tag>
+                    </template>
+                  </el-table-column>
+                </el-table>
+
+                <!-- Walmart seller -->
+                <el-table
+                  v-else-if="platform.id === 'walmart' && section.key === 'seller'"
+                  :data="section.rows"
+                  size="small"
+                  stripe
+                >
+                  <el-table-column prop="orderNo" label="订单号" min-width="140" />
+                  <AssigneeTableColumn width="90" />
+                  <el-table-column prop="productName" label="商品" min-width="130" show-overflow-tooltip />
+                  <el-table-column prop="shipDeadline" label="发货截止" width="150" />
+                  <el-table-column label="发货" width="90" align="center">
+                    <template #default="{ row }">
+                      <el-tag :type="row.isShipped ? 'success' : 'warning'" size="small">
+                        {{ row.isShipped ? '已发' : '未发' }}
+                      </el-tag>
+                    </template>
+                  </el-table-column>
+                </el-table>
+
+                <!-- Walmart listings -->
+                <el-table
+                  v-else-if="platform.id === 'walmart' && section.key === 'listings'"
+                  :data="section.rows"
+                  size="small"
+                  stripe
+                >
+                  <el-table-column prop="typeLabel" label="类型" width="100" />
+                  <AssigneeTableColumn width="90" />
+                  <el-table-column prop="sku" label="SKU" width="100" />
+                  <el-table-column prop="productName" label="商品" min-width="130" show-overflow-tooltip />
+                  <el-table-column prop="detail" label="问题说明" min-width="180" show-overflow-tooltip />
+                </el-table>
+
+                <!-- Domestic platform orders -->
+                <el-table
+                  v-else-if="['pdd', 'douyin', 'channels'].includes(platform.id) && section.key === 'orders'"
+                  :data="section.rows"
+                  size="small"
+                  stripe
+                >
+                  <el-table-column prop="orderNo" label="订单号" min-width="150" />
+                  <AssigneeTableColumn width="90" />
+                  <el-table-column prop="productName" label="商品" min-width="130" show-overflow-tooltip />
+                  <el-table-column v-if="platform.id !== 'pdd'" prop="channel" label="来源" width="80" />
+                  <el-table-column prop="shipDeadline" label="发货截止" width="150" />
+                  <el-table-column label="状态" width="90" align="center">
+                    <template #default="{ row }">
+                      <el-tag :type="row.isShipped ? 'success' : 'warning'" size="small">
+                        {{ row.isShipped ? '已发' : row.status }}
+                      </el-tag>
+                    </template>
+                  </el-table-column>
+                </el-table>
+
+                <!-- Domestic platform issues -->
+                <el-table
+                  v-else-if="['pdd', 'douyin', 'channels'].includes(platform.id) && section.key === 'issues'"
+                  :data="section.rows"
+                  size="small"
+                  stripe
+                >
+                  <el-table-column prop="typeLabel" label="类型" width="110" />
+                  <AssigneeTableColumn width="90" />
+                  <el-table-column prop="sku" label="SKU" width="100" />
+                  <el-table-column prop="productName" label="商品" min-width="130" show-overflow-tooltip />
+                  <el-table-column prop="detail" label="说明" min-width="180" show-overflow-tooltip />
                 </el-table>
 
                 <!-- Amazon buyer messages -->

@@ -47,6 +47,34 @@ const demoAccounts = [
     password: 'Emp@Demo987',
     hint: 'Amazon',
   },
+  {
+    role: 'employee',
+    label: '周婷',
+    account: 'zhouting@yituo-outdoor.com',
+    password: 'Emp@Demo852',
+    hint: 'Walmart',
+  },
+  {
+    role: 'employee',
+    label: '孙浩',
+    account: 'sunhao@yituo-outdoor.com',
+    password: 'Emp@Demo741',
+    hint: '拼多多',
+  },
+  {
+    role: 'employee',
+    label: '林雪',
+    account: 'linxue@yituo-outdoor.com',
+    password: 'Emp@Demo963',
+    hint: '抖音',
+  },
+  {
+    role: 'employee',
+    label: '何静',
+    account: 'hejing@yituo-outdoor.com',
+    password: 'Emp@Demo159',
+    hint: '视频号',
+  },
 ]
 
 const roleLabel = computed(() => (portalRole.value === 'boss' ? '企业管理员' : '员工工作台'))

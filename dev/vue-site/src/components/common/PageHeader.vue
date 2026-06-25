@@ -23,16 +23,15 @@ defineProps({
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 20px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--ch-border);
+  margin-bottom: 16px;
 }
 
 .page-header__desc {
   display: block;
-  margin-top: 6px;
+  margin-top: 4px;
   font-size: 13px;
   line-height: 1.5;
+  color: var(--ch-text-muted);
 }
 
 .actions {
