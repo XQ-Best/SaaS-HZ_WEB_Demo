@@ -264,13 +264,7 @@ public class MemberScopeService {
 
     public Set<String> assignableEmployeeMenuCodes() {
 
-        return menuRepository.findByPortalOrderBySortOrderAsc("employee").stream()
-
-                .filter(menu -> "module".equals(menu.getMenuType()))
-
-                .map(menu -> menu.getCode().toLowerCase(Locale.ROOT))
-
-                .collect(LinkedHashSet::new, Set::add, Set::addAll);
+        return Set.of("employee.warehouse");
 
     }
 
@@ -352,6 +346,12 @@ public class MemberScopeService {
 
             String platform = matcher.group(1);
 
+            if (isDtcStorePlatform(platform) && allowedPlatforms.contains("dtc")) {
+
+                return platform;
+
+            }
+
             if (!allowedPlatforms.contains(platform)) {
 
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "店铺 " + shopId + " 不属于已选平台");
@@ -366,6 +366,12 @@ public class MemberScopeService {
 
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "无法识别店铺所属平台: " + shopId);
 
+    }
+
+    private boolean isDtcStorePlatform(String platform) {
+        if (platform == null) return false;
+        String key = platform.toLowerCase(Locale.ROOT);
+        return "shopify".equals(key) || "wordpress".equals(key);
     }
 
 }

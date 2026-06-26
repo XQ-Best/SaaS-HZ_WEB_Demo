@@ -20,19 +20,18 @@ function createId() {
   return `emp_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
 }
 
-/** 始终同步 Demo 员工样本（按 id 覆盖更新） */
+/** 始终同步 Demo 员工样本（按 id 覆盖更新，保留已编辑字段） */
 export function ensureDemoEmployees() {
   const existing = loadAll()
   const demoById = Object.fromEntries(DEMO_EMPLOYEES.map((e) => [e.id, e]))
   const custom = existing.filter((item) => !demoById[item.id])
   const mergedDemos = DEMO_EMPLOYEES.map((item) => {
     const current = existing.find((row) => row.id === item.id)
+    if (!current) return { ...item }
     return {
       ...item,
-      assignedStoreIds:
-        current?.assignedStoreIds !== undefined
-          ? current.assignedStoreIds
-          : [...(item.assignedStoreIds || [])],
+      ...current,
+      password: current.password || item.password,
     }
   })
   saveAll([...custom, ...mergedDemos])
@@ -74,7 +73,7 @@ export function fetchLocalEmployees() {
 
 export function saveLocalEmployee(payload) {
   const employees = loadAll()
-  const { id, phone, status, assignedStoreIds } = payload
+  const { id, phone, status, assignedStoreIds, menuCodes } = payload
   const validation = validateEmployeeInput({ ...payload, employees })
   if (validation.error) return { error: validation.error }
 
@@ -84,6 +83,9 @@ export function saveLocalEmployee(payload) {
   const storeConflict = validateStoreAssignmentConflict(employees, storeIds, id)
   if (storeConflict) return { error: storeConflict }
 
+  const codes = Array.isArray(menuCodes)
+    ? menuCodes.filter((code) => code === 'employee.warehouse')
+    : []
   const boundAt = new Date().toISOString().replace('T', ' ').slice(0, 19)
 
   if (id) {
@@ -96,6 +98,7 @@ export function saveLocalEmployee(payload) {
       role: validation.role,
       platforms: validation.platforms,
       assignedStoreIds: storeIds,
+      menuCodes: codes,
       phone: String(phone || '').trim(),
       status: status !== false,
       password: validation.password || employees[index].password,
@@ -112,6 +115,7 @@ export function saveLocalEmployee(payload) {
     role: validation.role,
     platforms: validation.platforms,
     assignedStoreIds: storeIds,
+    menuCodes: codes,
     phone: String(phone || '').trim(),
     password: validation.password,
     status: status !== false,

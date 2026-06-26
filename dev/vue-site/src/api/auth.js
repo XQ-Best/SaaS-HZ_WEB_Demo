@@ -1,11 +1,13 @@
 import { isTemuBackendEnabled } from './config'
-import { backendLogin } from './request'
+import { backendLogin, clearAccessToken } from './request'
 import {
   ensureDefaultUser,
   loginLocalBoss,
   registerLocalUser,
 } from './authLocal'
+import { loginLocalWarehouse } from './warehouseAuthLocal'
 import { fetchLocalEmployees } from './employeesLocal'
+import { resolveWarehouseNames } from '@/utils/warehouseScope'
 
 function mapBackendSession(backend) {
   if (!backend) return {}
@@ -17,6 +19,8 @@ function mapBackendSession(backend) {
     menus: backend.menus || [],
     platforms: backend.platforms || [],
     shop_scope: backend.shop_scope || [],
+    warehouse_scope: backend.warehouse_scope || [],
+    warehouse_scope_names: backend.warehouse_scope_names || [],
   }
 }
 
@@ -53,6 +57,7 @@ export async function loginBoss(payload) {
 
   const result = loginLocalBoss({ account, password })
   if (result.error) throw new Error(result.error)
+  clearAccessToken()
   return {
     success: true,
     data: {
@@ -62,6 +67,7 @@ export async function loginBoss(payload) {
       menus: [],
       platforms: [],
       shop_scope: [],
+      warehouse_scope: [],
     },
   }
 }
@@ -84,6 +90,7 @@ export async function loginEmployee({ account, password }) {
         tenant_id: backend.tenant_id || null,
         menus: backend.menus || [],
         shop_scope: backend.shop_scope || [],
+        warehouse_scope: backend.warehouse_scope || [],
       },
     }
   }
@@ -96,9 +103,10 @@ export async function loginEmployee({ account, password }) {
     (e) => e.account.toLowerCase() === acc && e.password === pwd && e.status !== false,
   )
   if (!employee) {
-    throw new Error('员工账号或密码错误，请联系管理员在员工绑定中添加')
+    throw new Error('员工账号或密码错误，请联系管理员在运营绑定中添加')
   }
 
+  clearAccessToken()
   return {
     success: true,
     data: {
@@ -108,12 +116,52 @@ export async function loginEmployee({ account, password }) {
       role: employee.role,
       platforms: employee.platforms,
       assignedStoreIds: employee.assignedStoreIds || [],
+      menuCodes: employee.menuCodes || [],
       backendLinked: false,
       backendUserId: null,
       backendRole: '',
       tenant_id: null,
       menus: [],
       shop_scope: [],
+    },
+  }
+}
+
+export async function loginWarehouse({ account, password }) {
+  const backend = await loginViaBackend(account, password, 'warehouse')
+  if (backend) {
+    return {
+      success: true,
+      data: {
+        id: String(backend.user_id),
+        name: backend.nickname || backend.account || account,
+        account: backend.account || account,
+        role: backend.job_title || '仓库管理员',
+        phone: '',
+        backendLinked: true,
+        backendUserId: backend.user_id,
+        backendRole: backend.role,
+        tenant_id: backend.tenant_id,
+        menus: backend.menus || [],
+        warehouse_scope: backend.warehouse_scope || [],
+        warehouse_scope_names: backend.warehouse_scope_names
+          || resolveWarehouseNames(backend.warehouse_scope || []),
+      },
+    }
+  }
+
+  const result = loginLocalWarehouse({ account, password })
+  if (result.error) throw new Error(result.error)
+  clearAccessToken()
+  const warehouseIds = result.data.warehouseIds || []
+  return {
+    success: true,
+    data: {
+      ...result.data,
+      backendLinked: false,
+      menus: [],
+      warehouse_scope: warehouseIds,
+      warehouse_scope_names: resolveWarehouseNames(warehouseIds),
     },
   }
 }

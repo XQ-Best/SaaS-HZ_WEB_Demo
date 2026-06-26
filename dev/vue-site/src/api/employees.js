@@ -1,5 +1,6 @@
 import { isTemuBackendEnabled } from './config'
-import { service } from './request'
+import { getAccessToken, service } from './request'
+import { WAREHOUSE_MENU_CODE } from '@/constants/employees'
 import {
   deleteLocalEmployee,
   fetchLocalEmployees,
@@ -17,13 +18,16 @@ function mapMember(row) {
     phone: row.phone || '',
     platforms: row.platforms || [],
     assignedStoreIds: row.assignedStoreIds || row.shop_ids || [],
-    menuCodes: row.menu_codes || [],
+    menuCodes: row.menu_codes || row.menuCodes || [],
     status: row.status !== false,
     boundAt: row.boundAt || row.bound_at || '',
   }
 }
 
 function toMemberPayload(payload) {
+  const menuCodes = Array.isArray(payload.menuCodes)
+    ? payload.menuCodes.filter((code) => code === WAREHOUSE_MENU_CODE)
+    : []
   const body = {
     name: payload.name,
     account: payload.account,
@@ -31,11 +35,17 @@ function toMemberPayload(payload) {
     role: payload.role,
     platforms: payload.platforms || [],
     shop_ids: payload.assignedStoreIds || [],
-    menu_codes: Array.isArray(payload.menuCodes) ? payload.menuCodes : [],
+    menu_codes: menuCodes,
     status: payload.status !== false,
   }
   if (payload.password) body.password = payload.password
   return body
+}
+
+export function canUseTenantMembersBackend(auth) {
+  if (!isTemuBackendEnabled()) return false
+  if (!getAccessToken() || !auth?.backendLinked) return false
+  return Boolean(auth?.isBoss)
 }
 
 async function fetchBackendMembers() {
@@ -44,18 +54,23 @@ async function fetchBackendMembers() {
   return { success: true, data: rows.map(mapMember) }
 }
 
-export async function fetchAssignableMenus() {
-  if (!isTemuBackendEnabled()) return { success: true, data: [] }
-  try {
-    const res = await service.get('/api/tenant/assignable-menus')
-    return { success: true, data: res?.data || [] }
-  } catch {
-    return { success: true, data: [] }
+export async function fetchAssignableMenus(auth) {
+  if (canUseTenantMembersBackend(auth)) {
+    try {
+      const res = await service.get('/api/tenant/assignable-menus')
+      return { success: true, data: res?.data || [] }
+    } catch {
+      /* fallback */
+    }
+  }
+  return {
+    success: true,
+    data: [{ code: WAREHOUSE_MENU_CODE, label: '仓库下单', group: 'warehouse' }],
   }
 }
 
-export async function fetchEmployees() {
-  if (isTemuBackendEnabled()) {
+export async function fetchEmployees(auth) {
+  if (canUseTenantMembersBackend(auth)) {
     try {
       return await fetchBackendMembers()
     } catch {
@@ -65,17 +80,13 @@ export async function fetchEmployees() {
   return fetchLocalEmployees()
 }
 
-export async function saveEmployee(payload) {
-  if (isTemuBackendEnabled()) {
-    try {
-      const body = toMemberPayload(payload)
-      const res = payload.id
-        ? await service.put(`/api/tenant/members/${payload.id}`, body)
-        : await service.post('/api/tenant/members', body)
-      return { success: true, data: mapMember(res?.data) }
-    } catch (err) {
-      throw err
-    }
+export async function saveEmployee(auth, payload) {
+  if (canUseTenantMembersBackend(auth)) {
+    const body = toMemberPayload(payload)
+    const res = payload.id
+      ? await service.put(`/api/tenant/members/${payload.id}`, body)
+      : await service.post('/api/tenant/members', body)
+    return { success: true, data: mapMember(res?.data) }
   }
 
   const result = saveLocalEmployee(payload)
@@ -92,14 +103,10 @@ export async function updateMemberScopes(memberId, { platforms, assignedStoreIds
   return { success: true, data: mapMember(res?.data) }
 }
 
-export async function deleteEmployee(id) {
-  if (isTemuBackendEnabled()) {
-    try {
-      await service.delete(`/api/tenant/members/${id}`)
-      return { success: true }
-    } catch (err) {
-      throw err
-    }
+export async function deleteEmployee(auth, id) {
+  if (canUseTenantMembersBackend(auth)) {
+    await service.delete(`/api/tenant/members/${id}`)
+    return { success: true }
   }
 
   const result = deleteLocalEmployee(id)
@@ -107,14 +114,10 @@ export async function deleteEmployee(id) {
   return result
 }
 
-export async function toggleEmployeeStatus(id, status) {
-  if (isTemuBackendEnabled()) {
-    try {
-      const res = await service.patch(`/api/tenant/members/${id}/status`, { status })
-      return { success: true, data: mapMember(res?.data) }
-    } catch (err) {
-      throw err
-    }
+export async function toggleEmployeeStatus(auth, id, status) {
+  if (canUseTenantMembersBackend(auth)) {
+    const res = await service.patch(`/api/tenant/members/${id}/status`, { status })
+    return { success: true, data: mapMember(res?.data) }
   }
 
   const result = toggleLocalEmployeeStatus(id, status)

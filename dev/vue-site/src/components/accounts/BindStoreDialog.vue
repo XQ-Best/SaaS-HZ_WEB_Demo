@@ -3,6 +3,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { bindPlatformStore } from '@/api/platformAccounts'
 import { useAuthStore } from '@/stores/auth'
+import { DTC_STORE_TYPE_OPTIONS } from '@/constants/platforms'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -39,10 +40,7 @@ const platformGroups = [
   },
   {
     label: '独立站',
-    options: [
-      { value: 'shopify', label: 'Shopify' },
-      { value: 'wordpress', label: 'WordPress' },
-    ],
+    options: DTC_STORE_TYPE_OPTIONS,
   },
 ]
 

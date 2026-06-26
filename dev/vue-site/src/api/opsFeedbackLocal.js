@@ -85,3 +85,9 @@ export function submitOpsFeedback(payload) {
 export function getFeedbackByTaskId(taskId) {
   return fetchOpsFeedback({ date: 'all' }).find((item) => item.taskId === taskId)
 }
+
+export function fetchFeedbacksByTaskId(taskId) {
+  return fetchOpsFeedback({ date: 'all' })
+    .filter((item) => item.taskId === taskId)
+    .sort((a, b) => String(b.submittedAt).localeCompare(String(a.submittedAt)))
+}

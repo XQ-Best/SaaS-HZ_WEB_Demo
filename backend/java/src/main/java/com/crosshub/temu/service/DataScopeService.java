@@ -2,10 +2,13 @@ package com.crosshub.temu.service;
 
 import com.crosshub.temu.entity.TemuSale;
 import com.crosshub.temu.entity.TemuShop;
+import com.crosshub.temu.entity.WarehouseSite;
 import com.crosshub.temu.repository.TemuSaleRepository;
 import com.crosshub.temu.repository.TemuShopRepository;
 import com.crosshub.temu.repository.UserPlatformScopeRepository;
 import com.crosshub.temu.repository.UserShopScopeRepository;
+import com.crosshub.temu.repository.UserWarehouseScopeRepository;
+import com.crosshub.temu.repository.WarehouseSiteRepository;
 import com.crosshub.temu.security.AuthContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -24,19 +27,25 @@ public class DataScopeService {
     private final TemuSaleRepository saleRepository;
     private final UserPlatformScopeRepository platformScopeRepository;
     private final UserShopScopeRepository shopScopeRepository;
+    private final UserWarehouseScopeRepository warehouseScopeRepository;
+    private final WarehouseSiteRepository warehouseSiteRepository;
 
     public DataScopeService(
             AuthContext authContext,
             TemuShopRepository shopRepository,
             TemuSaleRepository saleRepository,
             UserPlatformScopeRepository platformScopeRepository,
-            UserShopScopeRepository shopScopeRepository
+            UserShopScopeRepository shopScopeRepository,
+            UserWarehouseScopeRepository warehouseScopeRepository,
+            WarehouseSiteRepository warehouseSiteRepository
     ) {
         this.authContext = authContext;
         this.shopRepository = shopRepository;
         this.saleRepository = saleRepository;
         this.platformScopeRepository = platformScopeRepository;
         this.shopScopeRepository = shopScopeRepository;
+        this.warehouseScopeRepository = warehouseScopeRepository;
+        this.warehouseSiteRepository = warehouseSiteRepository;
     }
 
     public Long requireTenantId() {
@@ -98,6 +107,30 @@ public class DataScopeService {
         return platformScopeRepository.findByTenantIdAndUserId(tenantId, userId).stream()
                 .map(scope -> scope.getPlatform().toLowerCase(Locale.ROOT))
                 .distinct()
+                .toList();
+    }
+
+    public List<String> resolveWarehouseScopeForLogin(Long tenantId, Long userId, String portalRole) {
+        if (!"warehouse".equalsIgnoreCase(portalRole)) {
+            return List.of();
+        }
+        return warehouseScopeRepository.findByTenantIdAndUserId(tenantId, userId).stream()
+                .map(scope -> scope.getWarehouseId())
+                .distinct()
+                .toList();
+    }
+
+    public List<String> resolveWarehouseScopeNamesForLogin(Long tenantId, Long userId, String portalRole) {
+        if (!"warehouse".equalsIgnoreCase(portalRole)) {
+            return List.of();
+        }
+        Set<String> allowed = new HashSet<>(resolveWarehouseScopeForLogin(tenantId, userId, portalRole));
+        if (allowed.isEmpty()) {
+            return List.of();
+        }
+        return warehouseSiteRepository.findByTenantIdOrderBySortOrderAscNameAsc(tenantId).stream()
+                .filter(site -> allowed.contains(site.getId()))
+                .map(WarehouseSite::getName)
                 .toList();
     }
 

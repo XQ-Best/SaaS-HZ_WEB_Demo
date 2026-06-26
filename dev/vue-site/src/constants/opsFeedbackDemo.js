@@ -86,6 +86,23 @@ export const OPS_FEEDBACK_SEED = [
     date: '',
     submittedAt: '2026-06-25 11:50:00',
   },
+  {
+    id: 'fb_seed_assign_1',
+    taskId: 'assign_seed_1',
+    employeeId: 'demo_emp_1',
+    employeeName: '王一鸣',
+    employeeRole: 'Temu 运营',
+    platform: 'Temu',
+    platformKey: 'temu',
+    taskTitle: '整理 Temu 爆款通报材料并同步仓储',
+    category: '运营',
+    outcome: 'in_progress',
+    outcomeLabel: '跟进中',
+    feedback: '通报 PPT 初稿已完成 60%，已与仓储确认碳纤维登山杖补货节奏，预计今日 20:00 前提交终稿。',
+    storeName: '—',
+    date: '',
+    submittedAt: '2026-06-25 15:10:00',
+  },
 ]
 
 export const OUTCOME_OPTIONS = [

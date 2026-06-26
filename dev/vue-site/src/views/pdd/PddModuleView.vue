@@ -75,7 +75,7 @@ const {
       :image-size="96"
     >
       <el-text type="info" size="small">
-        {{ auth.isBoss ? '请先在「账户绑定」中绑定拼多多店铺' : '请联系企业管理员在员工绑定中分配负责店铺' }}
+        {{ auth.isBoss ? '请先在「账户绑定」中绑定拼多多店铺' : '请联系企业管理员在运营绑定中分配负责店铺' }}
       </el-text>
       <el-button v-if="auth.isBoss" type="primary" style="margin-top: 16px" @click="goToAccountBinding">
         前往账户绑定

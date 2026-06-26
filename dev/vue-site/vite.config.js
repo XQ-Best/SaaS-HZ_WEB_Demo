@@ -31,6 +31,14 @@ export default defineConfig(({ mode }) => {
         target: process.env.VITE_TEMU_API_PROXY || 'http://localhost:18080',
         changeOrigin: true,
       },
+      '/api/warehouse': {
+        target: process.env.VITE_TEMU_API_PROXY || 'http://localhost:18080',
+        changeOrigin: true,
+      },
+      '/api/tenant': {
+        target: process.env.VITE_TEMU_API_PROXY || 'http://localhost:18080',
+        changeOrigin: true,
+      },
       '/api': {
         target: 'http://localhost:3000',
         changeOrigin: true,

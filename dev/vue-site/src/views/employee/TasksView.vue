@@ -2,17 +2,20 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Refresh, Right } from '@element-plus/icons-vue'
+import { Refresh, Right, View, WarningFilled } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { loadOperationsOverview } from '@/api/operationsOverview'
 import { submitTaskFeedback } from '@/api/opsFeedback'
-import { updateAssignedTaskStatus } from '@/api/assignedTasks'
+import { syncAssignedTaskFeedback, fetchAssignedTaskDetail } from '@/api/assignedTasks'
 import { calcTaskStats } from '@/utils/operations'
 import { groupEmployeeTasksByPlatform } from '@/utils/employeeTasks'
 import { TASK_STATUS_META } from '@/constants/operations'
-import { OUTCOME_OPTIONS } from '@/constants/opsFeedbackDemo'
+import { OUTCOME_MAP } from '@/constants/opsFeedbackDemo'
 import PageHeader from '@/components/common/PageHeader.vue'
 import PageScroll from '@/components/common/PageScroll.vue'
+import AssignedTaskDetailDrawer from '@/components/tasks/AssignedTaskDetailDrawer.vue'
+import EmployeeTaskDetailDrawer from '@/components/tasks/EmployeeTaskDetailDrawer.vue'
+import TaskFeedbackDialog from '@/components/tasks/TaskFeedbackDialog.vue'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -22,6 +25,11 @@ const activeFilter = ref('all')
 const feedbackVisible = ref(false)
 const feedbackSubmitting = ref(false)
 const activeTask = ref(null)
+const detailVisible = ref(false)
+const detailTask = ref(null)
+const detailFeedbacks = ref([])
+const opsDetailVisible = ref(false)
+const opsDetailTask = ref(null)
 const feedbackForm = reactive({
   outcome: 'resolved',
   feedback: '',
@@ -36,16 +44,46 @@ const priorityMap = {
 const sourceMap = {
   issue: { label: '运营预警', type: 'danger' },
   plan: { label: '计划任务', type: 'info' },
-  assigned: { label: '管理员分配', type: 'primary' },
 }
 
-const stats = computed(() => calcTaskStats(tasks.value))
-const issueCount = computed(() => tasks.value.filter((t) => t.source === 'issue' && t.status !== '已完成').length)
+const assignedTasks = computed(() => tasks.value.filter((task) => task.source === 'assigned'))
+const operationalTasks = computed(() => tasks.value.filter((task) => task.source !== 'assigned'))
+const platformGroups = computed(() => groupEmployeeTasksByPlatform(operationalTasks.value))
 
-const platformGroups = computed(() => groupEmployeeTasksByPlatform(tasks.value))
+const stats = computed(() => calcTaskStats(tasks.value))
+const assignedStats = computed(() => calcTaskStats(assignedTasks.value))
+const issueCount = computed(() => tasks.value.filter((t) => t.source === 'issue' && t.status !== '已完成').length)
+const assignedPending = computed(() => assignedTasks.value.filter((t) => t.status !== '已完成').length)
+
+const showAssignedSection = computed(() => activeFilter.value === 'all' || activeFilter.value === 'assigned')
+const showPlatformSections = computed(() => activeFilter.value !== 'assigned')
+
+const visibleAssignedTasks = computed(() => {
+  if (!showAssignedSection.value) return []
+  return assignedTasks.value
+})
+
+const visibleGroups = computed(() => {
+  if (!showPlatformSections.value) return []
+  if (activeFilter.value === 'all') return platformGroups.value
+  return platformGroups.value.filter((g) => g.platformKey === activeFilter.value)
+})
 
 const filterOptions = computed(() => {
-  const options = [{ value: 'all', label: '全部', count: tasks.value.filter((t) => t.status !== '已完成').length }]
+  const options = [
+    {
+      value: 'all',
+      label: '全部',
+      count: tasks.value.filter((t) => t.status !== '已完成').length,
+    },
+  ]
+  if (assignedTasks.value.length) {
+    options.push({
+      value: 'assigned',
+      label: '管理员分配',
+      count: assignedPending.value,
+    })
+  }
   for (const group of platformGroups.value) {
     options.push({
       value: group.platformKey,
@@ -54,11 +92,6 @@ const filterOptions = computed(() => {
     })
   }
   return options
-})
-
-const visibleGroups = computed(() => {
-  if (activeFilter.value === 'all') return platformGroups.value
-  return platformGroups.value.filter((g) => g.platformKey === activeFilter.value)
 })
 
 const platformLabels = computed(() => {
@@ -71,11 +104,18 @@ const platformLabels = computed(() => {
     douyin: '抖音',
     channels: '视频号',
     '1688': '1688',
+    dtc: '独立站',
     shopify: '独立站',
     wordpress: '独立站',
   }
   const labels = (auth.employee.platforms || []).map((p) => map[p] || p)
   return [...new Set(labels)].join(' · ') || '—'
+})
+
+const isAssignedFeedback = computed(() => activeTask.value?.source === 'assigned')
+const feedbackSourceMeta = computed(() => {
+  const source = activeTask.value?.source
+  return sourceMap[source] || { label: '任务', type: 'info' }
 })
 
 async function loadTasks() {
@@ -90,11 +130,41 @@ async function loadTasks() {
   }
 }
 
+function latestFeedbackLabel(task) {
+  if (!task?.lastOutcome) return ''
+  return OUTCOME_MAP[task.lastOutcome]?.label || ''
+}
+
+function rowNeedsAttention(task) {
+  if (!task || task.status === '已完成') return false
+  return task.lastOutcome === 'need_help' || task.lastOutcome === 'blocked'
+}
+
 function openFeedback(task) {
   activeTask.value = task
-  feedbackForm.outcome = 'resolved'
+  feedbackForm.outcome = task.lastOutcome === 'resolved' ? 'resolved' : 'in_progress'
   feedbackForm.feedback = ''
   feedbackVisible.value = true
+}
+
+function openTaskDetail(row) {
+  if (row.source === 'assigned') {
+    openAssignedDetail(row)
+    return
+  }
+  opsDetailTask.value = row
+  opsDetailVisible.value = true
+}
+
+function openAssignedDetail(row) {
+  try {
+    const res = fetchAssignedTaskDetail(row.id)
+    detailTask.value = res.data.task
+    detailFeedbacks.value = res.data.feedbacks
+    detailVisible.value = true
+  } catch (err) {
+    ElMessage.error(err.message || '加载任务详情失败')
+  }
 }
 
 async function submitFeedback() {
@@ -120,29 +190,29 @@ async function submitFeedback() {
       feedback: feedbackForm.feedback,
     })
 
-    if (feedbackForm.outcome === 'resolved') {
-      activeTask.value.status = '已完成'
-      activeTask.value.progress = 100
-    } else if (feedbackForm.outcome === 'in_progress') {
-      activeTask.value.status = '进行中'
-      activeTask.value.progress = Math.max(activeTask.value.progress || 0, 50)
-    } else {
-      activeTask.value.status = '进行中'
-    }
-
     if (activeTask.value.source === 'assigned') {
-      updateAssignedTaskStatus(activeTask.value.id, activeTask.value.status, {
-        progress: activeTask.value.progress,
+      syncAssignedTaskFeedback(activeTask.value.id, {
+        outcome: feedbackForm.outcome,
+        feedback: feedbackForm.feedback,
+        assigneeName: auth.employee.name,
       })
+      ElMessage.success('反馈已提交，已同步至管理员任务分配')
+    } else {
+      ElMessage.success('反馈已提交，将同步至运营总览')
     }
 
-    ElMessage.success('反馈已提交，管理员可在运营总览查看')
     feedbackVisible.value = false
+    feedbackForm.feedback = ''
+    await loadTasks()
   } catch (err) {
     ElMessage.error(err.message || '提交失败')
   } finally {
     feedbackSubmitting.value = false
   }
+}
+
+function closeFeedbackDialog() {
+  activeTask.value = null
 }
 
 function goPlatform(route) {
@@ -168,6 +238,11 @@ onMounted(loadTasks)
     <div v-loading="loading" class="task-center">
       <div class="metrics-bar metrics-bar--4">
         <div class="metric-item">
+          <div class="metric-value" :class="assignedPending ? 'is-primary' : ''">{{ assignedPending }}</div>
+          <div class="metric-label">管理员分配</div>
+          <div class="metric-hint">反馈与 Boss 端同步</div>
+        </div>
+        <div class="metric-item">
           <div class="metric-value" :class="issueCount ? 'is-danger' : ''">{{ issueCount }}</div>
           <div class="metric-label">运营预警</div>
           <div class="metric-hint">来自各平台实时问题</div>
@@ -177,17 +252,12 @@ onMounted(loadTasks)
             {{ stats.pending + stats.inProgress }}
           </div>
           <div class="metric-label">待完成</div>
-          <div class="metric-hint">含计划与预警任务</div>
+          <div class="metric-hint">含分配 / 计划 / 预警</div>
         </div>
         <div class="metric-item">
-          <div class="metric-value" :class="stats.overdue ? 'is-danger' : ''">{{ stats.overdue }}</div>
-          <div class="metric-label">已逾期</div>
-          <div class="metric-hint">需立即处理</div>
-        </div>
-        <div class="metric-item">
-          <div class="metric-value is-success">{{ stats.completionRate }}<small>%</small></div>
-          <div class="metric-label">完成率</div>
-          <div class="metric-hint">{{ stats.completed }}/{{ stats.total }} 已完成</div>
+          <div class="metric-value is-success">{{ assignedStats.completionRate }}<small>%</small></div>
+          <div class="metric-label">分配完成率</div>
+          <div class="metric-hint">{{ assignedStats.completed }}/{{ assignedStats.total || 0 }} 已完成</div>
         </div>
       </div>
 
@@ -206,16 +276,99 @@ onMounted(loadTasks)
       </div>
 
       <el-empty
-        v-if="!loading && !visibleGroups.length"
+        v-if="!loading && !visibleAssignedTasks.length && !visibleGroups.length"
         description="暂无与你相关的任务"
         :image-size="88"
       />
 
-      <div v-else class="platform-groups">
+      <section v-if="visibleAssignedTasks.length" class="task-section">
+        <header class="task-section__head">
+          <div class="task-section__title">
+            <strong>管理员分配</strong>
+            <el-tag type="primary" size="small" effect="plain">反馈同步</el-tag>
+            <el-tag v-if="assignedPending" type="warning" size="small" effect="plain">
+              {{ assignedPending }} 待完成
+            </el-tag>
+          </div>
+        </header>
+
+        <el-table :data="visibleAssignedTasks" size="small" stripe class="task-table">
+          <el-table-column label="任务" min-width="220">
+            <template #default="{ row }">
+              <div class="task-title">{{ row.title }}</div>
+              <div v-if="row.detail" class="task-detail">{{ row.detail }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="platform" label="平台" width="100" show-overflow-tooltip />
+          <el-table-column prop="category" label="类型" width="80" />
+          <el-table-column label="优先级" width="72" align="center">
+            <template #default="{ row }">
+              <el-tag :type="priorityMap[row.priority]?.type || 'info'" size="small">
+                {{ priorityMap[row.priority]?.label || '中' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="最新反馈" min-width="160" show-overflow-tooltip>
+            <template #default="{ row }">
+              <template v-if="row.lastFeedback">
+                <el-tag
+                  v-if="latestFeedbackLabel(row)"
+                  size="small"
+                  :type="OUTCOME_MAP[row.lastOutcome]?.type || 'info'"
+                  effect="plain"
+                  class="feedback-tag"
+                >
+                  {{ latestFeedbackLabel(row) }}
+                </el-tag>
+                <span class="feedback-snippet">{{ row.lastFeedback }}</span>
+              </template>
+              <el-text v-else type="info" size="small">待提交反馈</el-text>
+            </template>
+          </el-table-column>
+          <el-table-column prop="due" label="截止" width="110" />
+          <el-table-column label="状态" width="100" align="center">
+            <template #default="{ row }">
+              <el-space :size="4">
+                <el-tag :type="TASK_STATUS_META[row.status]?.type" size="small">
+                  {{ row.status }}
+                </el-tag>
+                <el-icon v-if="rowNeedsAttention(row)" class="need-help-icon" color="var(--el-color-warning)">
+                  <WarningFilled />
+                </el-icon>
+              </el-space>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="168" align="center" fixed="right">
+            <template #default="{ row }">
+              <el-button
+                link
+                type="primary"
+                size="small"
+                :icon="View"
+                @click="openTaskDetail(row)"
+              >
+                详情
+              </el-button>
+              <el-button
+                v-if="row.status !== '已完成'"
+                link
+                type="primary"
+                size="small"
+                @click="openFeedback(row)"
+              >
+                提交反馈
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </section>
+
+      <div v-if="visibleGroups.length" class="platform-groups">
         <section v-for="group in visibleGroups" :key="group.platformKey" class="platform-group">
           <header class="platform-group__head">
             <div class="platform-group__title">
               <strong>{{ group.platform }}</strong>
+              <el-tag size="small" effect="plain">运营任务</el-tag>
               <el-tag v-if="group.high" type="danger" size="small" effect="plain">
                 {{ group.high }} 项高优
               </el-tag>
@@ -265,8 +418,17 @@ onMounted(loadTasks)
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="120" align="center" fixed="right">
+            <el-table-column label="操作" width="140" align="center" fixed="right">
               <template #default="{ row }">
+                <el-button
+                  link
+                  type="primary"
+                  size="small"
+                  :icon="View"
+                  @click="openTaskDetail(row)"
+                >
+                  详情
+                </el-button>
                 <el-button
                   v-if="row.status !== '已完成'"
                   link
@@ -276,7 +438,6 @@ onMounted(loadTasks)
                 >
                   提交反馈
                 </el-button>
-                <el-text v-else type="success" size="small">已完成</el-text>
               </template>
             </el-table-column>
           </el-table>
@@ -284,46 +445,30 @@ onMounted(loadTasks)
       </div>
     </div>
 
-    <el-dialog
+    <TaskFeedbackDialog
       v-model="feedbackVisible"
-      title="提交处理反馈"
-      width="480px"
-      destroy-on-close
-      @closed="activeTask = null"
-    >
-      <template v-if="activeTask">
-        <div class="feedback-task-summary">
-          <el-tag size="small" effect="plain">{{ activeTask.platform }}</el-tag>
-          <strong>{{ activeTask.title }}</strong>
-          <p v-if="activeTask.detail">{{ activeTask.detail }}</p>
-        </div>
+      :task="activeTask"
+      v-model:outcome="feedbackForm.outcome"
+      v-model:feedback="feedbackForm.feedback"
+      :submitting="feedbackSubmitting"
+      :is-assigned="isAssignedFeedback"
+      :source-label="feedbackSourceMeta.label"
+      :source-type="feedbackSourceMeta.type"
+      @submit="submitFeedback"
+      @closed="closeFeedbackDialog"
+    />
 
-        <el-form label-width="80px" class="feedback-form">
-          <el-form-item label="处理结果" required>
-            <el-radio-group v-model="feedbackForm.outcome">
-              <el-radio v-for="item in OUTCOME_OPTIONS" :key="item.value" :value="item.value">
-                {{ item.label }}
-              </el-radio>
-            </el-radio-group>
-          </el-form-item>
-          <el-form-item label="处理说明" required>
-            <el-input
-              v-model="feedbackForm.feedback"
-              type="textarea"
-              :rows="4"
-              placeholder="说明处理措施、进展或需要协助的原因，管理员将在运营总览查看"
-            />
-          </el-form-item>
-        </el-form>
-      </template>
+    <AssignedTaskDetailDrawer
+      v-model="detailVisible"
+      :task="detailTask"
+      :feedbacks="detailFeedbacks"
+      viewer-role="employee"
+    />
 
-      <template #footer>
-        <el-button @click="feedbackVisible = false">取消</el-button>
-        <el-button type="primary" :loading="feedbackSubmitting" @click="submitFeedback">
-          提交反馈
-        </el-button>
-      </template>
-    </el-dialog>
+    <EmployeeTaskDetailDrawer
+      v-model="opsDetailVisible"
+      :task="opsDetailTask"
+    />
   </PageScroll>
 </template>
 
@@ -331,6 +476,10 @@ onMounted(loadTasks)
 .task-center {
   display: grid;
   gap: 16px;
+}
+
+.metric-value.is-primary {
+  color: var(--ch-primary);
 }
 
 .filter-bar {
@@ -380,11 +529,7 @@ onMounted(loadTasks)
   color: #fff;
 }
 
-.platform-groups {
-  display: grid;
-  gap: 16px;
-}
-
+.task-section,
 .platform-group {
   border: 1px solid var(--ch-border);
   border-radius: var(--ch-radius-lg);
@@ -392,6 +537,7 @@ onMounted(loadTasks)
   overflow: hidden;
 }
 
+.task-section__head,
 .platform-group__head {
   display: flex;
   flex-wrap: wrap;
@@ -403,6 +549,7 @@ onMounted(loadTasks)
   background: var(--ch-surface-muted);
 }
 
+.task-section__title,
 .platform-group__title {
   display: flex;
   flex-wrap: wrap;
@@ -410,9 +557,15 @@ onMounted(loadTasks)
   align-items: center;
 }
 
+.task-section__title strong,
 .platform-group__title strong {
   font-size: 15px;
   color: var(--ch-text);
+}
+
+.platform-groups {
+  display: grid;
+  gap: 16px;
 }
 
 .task-table {
@@ -433,23 +586,16 @@ onMounted(loadTasks)
   line-height: 1.4;
 }
 
-.feedback-task-summary {
-  display: grid;
-  gap: 8px;
-  margin-bottom: 16px;
-  padding: 12px 14px;
-  border-radius: var(--ch-radius-md);
-  background: var(--ch-surface-muted);
+.feedback-tag {
+  margin-right: 6px;
 }
 
-.feedback-task-summary p {
-  margin: 0;
+.feedback-snippet {
   font-size: 12px;
-  color: var(--ch-text-muted);
-  line-height: 1.5;
+  color: var(--ch-text-secondary);
 }
 
-.feedback-form {
-  margin-top: 4px;
+.need-help-icon {
+  font-size: 14px;
 }
 </style>

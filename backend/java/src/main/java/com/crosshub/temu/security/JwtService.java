@@ -24,7 +24,13 @@ public class JwtService {
         this.key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
     }
 
-    public String createToken(AppUser user, String portalRole, List<String> platforms, List<String> shopScope) {
+    public String createToken(
+            AppUser user,
+            String portalRole,
+            List<String> platforms,
+            List<String> shopScope,
+            List<String> warehouseScope
+    ) {
         Instant now = Instant.now();
         Map<String, Object> claims = new HashMap<>();
         claims.put("uid", user.getId());
@@ -34,6 +40,7 @@ public class JwtService {
         claims.put("username", user.getUsername());
         claims.put("platforms", platforms == null ? List.of() : platforms);
         claims.put("shop_scope", shopScope == null ? List.of() : shopScope);
+        claims.put("warehouse_scope", warehouseScope == null ? List.of() : warehouseScope);
 
         return Jwts.builder()
                 .claims(claims)

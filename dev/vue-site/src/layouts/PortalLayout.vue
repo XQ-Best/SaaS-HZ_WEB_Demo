@@ -3,6 +3,8 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Bell, SwitchButton } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
+import WarehouseScopePanel from '@/components/warehouse/WarehouseScopePanel.vue'
+import { settingsMenuOpenKeys } from '@/utils/menuAuth'
 
 const route = useRoute()
 const router = useRouter()
@@ -11,22 +13,33 @@ const auth = useAuthStore()
 const menus = computed(() => auth.sidebarMenus)
 
 const activeMenu = computed(() => route.path)
+const openedMenus = computed(() => settingsMenuOpenKeys(route.path))
+const menuRenderKey = computed(() => `${route.path}:${openedMenus.value.join(',')}`)
 const pageTitle = computed(() => route.meta.title || 'CrossHub')
 
-const userPanelTitle = computed(() =>
-  auth.isBoss ? auth.company.name : auth.displayName,
-)
+const userPanelTitle = computed(() => {
+  if (auth.isBoss) return auth.company.name
+  if (auth.isWarehouse) return auth.warehouse.name
+  return auth.displayName
+})
 
-const userPanelRole = computed(() =>
-  auth.isBoss ? '企业管理员' : auth.employee.role || '运营专员',
-)
+const userPanelRole = computed(() => {
+  if (auth.isBoss) return '企业管理员'
+  if (auth.isWarehouse) return auth.warehouse.role || '仓库人员'
+  return auth.employee.role || '运营专员'
+})
 
-const userPanelMeta = computed(() =>
-  auth.isBoss ? auth.company.account : auth.employee.account,
-)
+const userPanelMeta = computed(() => {
+  if (auth.isBoss) return auth.company.account
+  if (auth.isWarehouse) {
+    const scope = auth.assignedWarehouseLabels.join('、')
+    return scope ? `负责：${scope}` : auth.warehouse.account
+  }
+  return auth.employee.account
+})
 
 const userInitial = computed(() => {
-  const name = auth.isBoss ? auth.company.name : auth.employee.name
+  const name = userPanelTitle.value
   return (name || 'U').slice(0, 1)
 })
 
@@ -51,11 +64,35 @@ function handleUserCommand(command) {
         </div>
       </div>
 
-      <el-menu :default-active="activeMenu" router class="portal-menu">
-        <el-menu-item v-for="item in menus" :key="item.index" :index="item.index">
-          <el-icon><component :is="item.icon" /></el-icon>
-          <span>{{ item.label }}</span>
-        </el-menu-item>
+      <WarehouseScopePanel v-if="auth.isWarehouse" variant="sidebar" />
+
+      <el-menu
+        :key="menuRenderKey"
+        :default-active="activeMenu"
+        :default-openeds="openedMenus"
+        router
+        class="portal-menu"
+      >
+        <template v-for="item in menus" :key="item.code || item.index">
+          <el-sub-menu v-if="item.children?.length" :index="item.code">
+            <template #title>
+              <el-icon><component :is="item.icon" /></el-icon>
+              <span>{{ item.label }}</span>
+            </template>
+            <el-menu-item
+              v-for="child in item.children"
+              :key="child.index"
+              :index="child.index"
+            >
+              <el-icon><component :is="child.icon" /></el-icon>
+              <span>{{ child.label }}</span>
+            </el-menu-item>
+          </el-sub-menu>
+          <el-menu-item v-else :index="item.index">
+            <el-icon><component :is="item.icon" /></el-icon>
+            <span>{{ item.label }}</span>
+          </el-menu-item>
+        </template>
       </el-menu>
 
       <div class="aside-footer">
@@ -71,6 +108,13 @@ function handleUserCommand(command) {
             <div class="user-panel__body">
               <span class="user-panel__role">{{ userPanelRole }}</span>
               <p class="user-panel__name" :title="userPanelTitle">{{ userPanelTitle }}</p>
+              <p
+                v-if="auth.isWarehouse && auth.assignedWarehouseLabels.length"
+                class="user-panel__scope"
+                :title="auth.assignedWarehouseLabels.join('、')"
+              >
+                {{ auth.assignedWarehouseLabels.join('、') }}
+              </p>
             </div>
             <el-icon class="user-panel__chevron"><SwitchButton /></el-icon>
           </div>
@@ -80,6 +124,17 @@ function handleUserCommand(command) {
                 <div class="user-panel-menu__head-inner">
                   <p class="user-panel-menu__name">{{ userPanelTitle }}</p>
                   <p class="user-panel-menu__meta">{{ userPanelMeta }}</p>
+                  <div v-if="auth.isWarehouse && auth.assignedWarehouseLabels.length" class="user-panel-menu__tags">
+                    <el-tag
+                      v-for="name in auth.assignedWarehouseLabels"
+                      :key="name"
+                      size="small"
+                      effect="plain"
+                      type="primary"
+                    >
+                      {{ name }}
+                    </el-tag>
+                  </div>
                 </div>
               </el-dropdown-item>
               <el-dropdown-item divided command="logout">
@@ -95,7 +150,12 @@ function handleUserCommand(command) {
     <el-container class="portal-body">
       <el-header class="portal-header">
         <div class="header-title">
-          <p class="header-eyebrow">{{ auth.portalLabel }}</p>
+          <p class="header-eyebrow">
+            <template v-if="auth.isWarehouse">
+              <WarehouseScopePanel variant="inline" />
+            </template>
+            <template v-else>{{ auth.portalLabel }}</template>
+          </p>
           <h2>{{ pageTitle }}</h2>
         </div>
         <div class="header-actions">
@@ -240,6 +300,35 @@ function handleUserCommand(command) {
   color: inherit;
 }
 
+.portal-menu :deep(.el-sub-menu__title) {
+  position: relative;
+  height: 42px;
+  margin-bottom: 4px;
+  border-radius: var(--ch-radius-sm);
+  color: var(--ch-sidebar-text);
+  font-size: 14px;
+  line-height: 42px;
+}
+
+.portal-menu :deep(.el-sub-menu__title:hover) {
+  color: var(--ch-sidebar-text-hover);
+  background: transparent;
+}
+
+.portal-menu :deep(.el-sub-menu.is-active > .el-sub-menu__title) {
+  color: var(--ch-sidebar-text-active);
+  font-weight: 500;
+}
+
+.portal-menu :deep(.el-sub-menu .el-menu-item) {
+  padding-left: 44px !important;
+  min-width: auto;
+}
+
+.portal-menu :deep(.el-sub-menu__icon-arrow) {
+  color: var(--ch-text-muted);
+}
+
 .aside-footer {
   padding: 10px;
   border-top: 1px solid var(--ch-border);
@@ -301,6 +390,16 @@ function handleUserCommand(command) {
   -webkit-line-clamp: 2;
   overflow: hidden;
   word-break: break-all;
+}
+
+.user-panel__scope {
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--ch-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .user-panel__chevron {
@@ -403,6 +502,13 @@ function handleUserCommand(command) {
   line-height: 1.4;
   color: var(--ch-text-muted);
   word-break: break-all;
+}
+
+.user-panel-popper .user-panel-menu__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
 }
 
 .user-panel-popper .el-dropdown-menu__item:not(.is-disabled) {

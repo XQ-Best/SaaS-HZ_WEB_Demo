@@ -1,6 +1,6 @@
 /** 泰州亿拓户外用品 — 全局 Demo 样本 */
 
-/** 员工端登录身份（与 Temu 运营、员工绑定一致） */
+/** 员工端登录身份（与 Temu 运营、运营绑定一致） */
 export const EMPLOYEE_PROFILE = { name: '王一鸣', platform: 'Temu', role: 'Temu 运营' }
 
 export const PLATFORMS = [
@@ -18,7 +18,7 @@ export const ACTIVITIES = [
 
 export const STAFF = [
   { id: 1, name: '王一鸣', role: 'Temu 运营', platforms: ['Temu'], permissions: ['查看数据', '编辑商品', '库存调整'], status: true },
-  { id: 2, name: '李婷', role: '仓储主管', platforms: ['Temu'], permissions: ['查看数据', '库存调整'], status: true },
+  { id: 2, name: '李婷', role: 'Temu 运营', platforms: ['Temu'], permissions: ['查看数据', '库存调整'], status: true },
   { id: 3, name: '张强', role: 'AliExpress 运营', platforms: ['AliExpress'], permissions: ['查看数据', '编辑商品'], status: true },
 ]
 

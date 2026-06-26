@@ -92,25 +92,11 @@ public class TenantMemberService {
 
         requireBossTenantId();
 
-        return menuRepository.findByPortalOrderBySortOrderAsc("employee").stream()
-
-                .filter(menu -> "module".equals(menu.getMenuType()))
-
-                .map(menu -> {
-
-                    Map<String, Object> item = new LinkedHashMap<>();
-
-                    item.put("code", menu.getCode());
-
-                    item.put("label", menu.getLabel());
-
-                    item.put("platform", menu.getPlatform());
-
-                    return item;
-
-                })
-
-                .toList();
+        return List.of(Map.of(
+                "code", "employee.warehouse",
+                "label", "仓库下单",
+                "group", "warehouse"
+        ));
 
     }
 

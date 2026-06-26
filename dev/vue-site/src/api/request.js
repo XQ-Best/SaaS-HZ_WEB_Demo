@@ -59,7 +59,10 @@ service.interceptors.response.use(
   },
   (error) => {
     const status = error.response?.status
-    const msg = pickMessage(error.response?.data) || error.message || '请求失败'
+    let msg = pickMessage(error.response?.data) || error.message || '请求失败'
+    if (status === 502 || status === 503) {
+      msg = '后端服务未启动或不可用，请启动 Java API（mvn -f backend/java/pom.xml spring-boot:run）'
+    }
     if (status === 401 && router.currentRoute.value?.path !== '/login') {
       clearSession()
       router.replace('/login')

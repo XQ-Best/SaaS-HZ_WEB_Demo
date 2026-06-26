@@ -40,7 +40,7 @@ export async function loadOperationsOverview(auth = null) {
     fetchAmazonStores(),
     fetchAlibaba1688Stores(),
     fetchDtcStores(),
-    fetchEmployees(),
+    fetchEmployees(auth),
   ])
 
   const employees = employeesRes.data || []

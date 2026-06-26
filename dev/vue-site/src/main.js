@@ -11,11 +11,20 @@ import router from './router'
 import { ensureDemoStores } from './api/platformAccountsLocal'
 import { ensureDemoEmployees } from './api/employeesLocal'
 import { ensureDemoCompetitors } from './api/temuCompetitorsLocal'
+import { ensureDemoWarehouseStaff } from './api/warehouseStaffLocal'
 import { ensureDefaultUser } from './api/authLocal'
+import { isTemuBackendEnabled } from './api/config'
+import { clearAccessToken } from './api/request'
+
+if (!isTemuBackendEnabled()) {
+  clearAccessToken()
+  localStorage.setItem('backend_linked', '0')
+}
 
 ensureDefaultUser()
 ensureDemoStores()
 ensureDemoEmployees()
+ensureDemoWarehouseStaff()
 ensureDemoCompetitors()
 
 const app = createApp(App)

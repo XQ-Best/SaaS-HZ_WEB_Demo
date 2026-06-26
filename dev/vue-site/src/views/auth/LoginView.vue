@@ -2,8 +2,8 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowRight, Lock, User, UserFilled } from '@element-plus/icons-vue'
-import { loginBoss, loginEmployee } from '@/api/auth'
+import { ArrowRight, Box, Lock, User, UserFilled } from '@element-plus/icons-vue'
+import { loginBoss, loginEmployee, loginWarehouse } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
 import { defaultLandingPath } from '@/utils/menuAuth'
 import AuthSplitLayout from '@/components/auth/AuthSplitLayout.vue'
@@ -76,9 +76,27 @@ const demoAccounts = [
     password: 'Emp@Demo159',
     hint: '视频号',
   },
+  {
+    role: 'warehouse',
+    label: '张仓管',
+    account: 'warehouse@yituo-outdoor.com',
+    password: 'Wh@Demo123',
+    hint: '仓库端口',
+  },
+  {
+    role: 'warehouse',
+    label: '李拣货',
+    account: 'picker@yituo-outdoor.com',
+    password: 'Wh@Demo456',
+    hint: '安徽仓库',
+  },
 ]
 
-const roleLabel = computed(() => (portalRole.value === 'boss' ? '企业管理员' : '员工工作台'))
+const roleLabel = computed(() => {
+  if (portalRole.value === 'boss') return '企业管理员'
+  if (portalRole.value === 'warehouse') return '仓库端口'
+  return '员工工作台'
+})
 
 onMounted(() => {
   const q = route.query.account
@@ -114,6 +132,14 @@ async function handleLogin() {
       })
       auth.setCompany(res.data)
       auth.login('boss')
+      router.push(defaultLandingPath(auth))
+    } else if (portalRole.value === 'warehouse') {
+      const res = await loginWarehouse({
+        account: account.value.trim(),
+        password: password.value,
+      })
+      auth.setWarehouse(res.data)
+      auth.login('warehouse')
       router.push(defaultLandingPath(auth))
     } else {
       const res = await loginEmployee({
@@ -158,6 +184,15 @@ async function handleLogin() {
       >
         <el-icon><User /></el-icon>
         员工端口
+      </button>
+      <button
+        type="button"
+        class="role-tab"
+        :class="{ 'is-active': portalRole === 'warehouse' }"
+        @click="portalRole = 'warehouse'"
+      >
+        <el-icon><Box /></el-icon>
+        仓库端口
       </button>
     </div>
 

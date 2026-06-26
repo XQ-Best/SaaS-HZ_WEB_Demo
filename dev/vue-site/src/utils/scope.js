@@ -1,4 +1,12 @@
 /** 按登录身份（企业管理员 / 员工负责店铺）过滤可见店铺 */
+import { DTC_PLATFORM_KEY, isDtcStorePlatform, storeMatchesPlatforms } from '@/constants/platforms'
+
+function employeePlatformList(auth) {
+  return auth.backendLinked
+    ? (auth.platforms || [])
+    : (auth.employee?.platforms || [])
+}
+
 export function scopeStores(stores = [], auth) {
   if (!auth || auth.isBoss) return stores
 
@@ -9,14 +17,10 @@ export function scopeStores(stores = [], auth) {
     return stores.filter((store) => assigned.includes(store.id))
   }
 
-  const platforms = new Set(
-    auth.backendLinked
-      ? (auth.platforms || [])
-      : (auth.employee?.platforms || []),
-  )
-  if (!platforms.size) return []
+  const platforms = employeePlatformList(auth)
+  if (!platforms.length) return []
 
-  return stores.filter((store) => platforms.has(store.platform))
+  return stores.filter((store) => storeMatchesPlatforms(store.platform, platforms))
 }
 
 export function scopeStoreIds(stores, auth) {
@@ -26,18 +30,17 @@ export function scopeStoreIds(stores, auth) {
 export function employeeHasPlatform(auth, platform) {
   if (!auth || auth.isBoss) return true
   const key = String(platform || '').toLowerCase()
-  const list = auth.backendLinked
-    ? (auth.platforms || [])
-    : (auth.employee?.platforms || [])
-  return list.includes(key)
+  const list = employeePlatformList(auth).map((item) => String(item).toLowerCase())
+  if (list.includes(key)) return true
+  if (isDtcStorePlatform(key) && list.includes(DTC_PLATFORM_KEY)) return true
+  if (key === DTC_PLATFORM_KEY && list.some((item) => isDtcStorePlatform(item))) return true
+  return false
 }
 
 export function employeeModuleMenus(auth) {
   if (!auth || auth.isBoss) return []
 
-  const platforms = auth.backendLinked
-    ? (auth.platforms || [])
-    : (auth.employee?.platforms || [])
+  const platforms = employeePlatformList(auth)
   const menus = []
   const seen = new Set()
 
@@ -50,6 +53,7 @@ export function employeeModuleMenus(auth) {
     douyin: { index: '/employee/douyin', label: '抖音运营' },
     channels: { index: '/employee/channels', label: '视频号运营' },
     '1688': { index: '/employee/1688', label: '1688 运营' },
+    [DTC_PLATFORM_KEY]: { index: '/employee/dtc', label: '独立站运营' },
     shopify: { index: '/employee/dtc', label: '独立站运营' },
     wordpress: { index: '/employee/dtc', label: '独立站运营' },
   }

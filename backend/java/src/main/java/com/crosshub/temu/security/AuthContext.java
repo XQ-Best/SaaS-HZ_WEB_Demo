@@ -35,6 +35,16 @@ public class AuthContext {
         return claims != null && "boss".equalsIgnoreCase(String.valueOf(claims.get("portal_role")));
     }
 
+    public boolean isWarehousePortal() {
+        Claims claims = CURRENT.get();
+        return claims != null && "warehouse".equalsIgnoreCase(String.valueOf(claims.get("portal_role")));
+    }
+
+    public boolean isWarehouseRole() {
+        Claims claims = CURRENT.get();
+        return claims != null && "warehouse".equalsIgnoreCase(String.valueOf(claims.get("role")));
+    }
+
     public Long tenantId() {
         Claims claims = CURRENT.get();
         if (claims == null) return null;
@@ -70,6 +80,17 @@ public class AuthContext {
         Claims claims = CURRENT.get();
         if (claims == null) return List.of();
         Object raw = claims.get("shop_scope");
+        if (raw instanceof List<?> list) {
+            return list.stream().map(String::valueOf).toList();
+        }
+        return List.of();
+    }
+
+    @SuppressWarnings("unchecked")
+    public List<String> warehouseScope() {
+        Claims claims = CURRENT.get();
+        if (claims == null) return List.of();
+        Object raw = claims.get("warehouse_scope");
         if (raw instanceof List<?> list) {
             return list.stream().map(String::valueOf).toList();
         }

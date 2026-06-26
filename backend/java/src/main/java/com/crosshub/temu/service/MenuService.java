@@ -92,6 +92,13 @@ public class MenuService {
 
         boolean bossPortal = "boss".equalsIgnoreCase(portalRole);
 
+        if ("warehouse".equalsIgnoreCase(portalRole)) {
+            return menuRepository.findByPortalOrderBySortOrderAsc(portalRole).stream()
+                    .filter(menu -> enabledFeatures.contains(menu.getCode()))
+                    .map(this::toDto)
+                    .toList();
+        }
+
         if (bossPortal) {
 
             return menuRepository.findByPortalOrderBySortOrderAsc(portalRole).stream()
@@ -150,13 +157,19 @@ public class MenuService {
 
         }
 
-        if (!grantedMenus.isEmpty()) {
+        if ("employee.warehouse".equalsIgnoreCase(menu.getCode())) {
 
-            return grantedMenus.contains(menu.getCode().toLowerCase());
+            return grantedMenus.contains("employee.warehouse");
 
         }
 
-        return allowEmployeeMenuByPlatform(menu, userPlatforms);
+        if ("module".equals(menu.getMenuType())) {
+
+            return allowEmployeeMenuByPlatform(menu, userPlatforms);
+
+        }
+
+        return false;
 
     }
 
@@ -207,6 +220,8 @@ public class MenuService {
         item.put("menu_type", menu.getMenuType());
 
         item.put("sort_order", menu.getSortOrder());
+
+        item.put("parent_code", menu.getParentCode());
 
         return item;
 

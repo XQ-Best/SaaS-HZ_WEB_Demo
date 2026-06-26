@@ -1,13 +1,18 @@
-/** 员工绑定 Demo 样本 */
+/** 运营绑定 Demo 样本 */
 import {
   DTC_PLATFORM_OPTIONS,
   DOMESTIC_PLATFORM_OPTIONS,
   MARKETPLACE_PLATFORM_OPTIONS,
   OTHER_PLATFORM_OPTIONS,
   PLATFORM_OPTION_GROUPS,
+  platformDisplayLabels,
 } from './platforms'
 
 export { PLATFORM_OPTION_GROUPS }
+
+/** 员工端仓库下单菜单 code，与后端 sys_menu / menu_codes 一致 */
+export const WAREHOUSE_MENU_CODE = 'employee.warehouse'
+
 export const DEMO_EMPLOYEES = [
   {
     id: 'demo_emp_1',
@@ -26,7 +31,7 @@ export const DEMO_EMPLOYEES = [
     name: '李婷',
     account: 'liting@yituo-outdoor.com',
     password: 'Emp@Demo456',
-    role: '仓储主管',
+    role: 'Temu 运营',
     platforms: ['temu'],
     assignedStoreIds: [],
     phone: '13800138002',
@@ -51,7 +56,7 @@ export const DEMO_EMPLOYEES = [
     account: 'chenmin@yituo-outdoor.com',
     password: 'Emp@Demo321',
     role: '独立站运营',
-    platforms: ['shopify', 'wordpress'],
+    platforms: ['dtc'],
     assignedStoreIds: ['demo_shopify_1', 'demo_shopify_2', 'demo_wordpress_1'],
     phone: '13800138004',
     status: true,
@@ -134,12 +139,14 @@ export const DEMO_EMPLOYEES = [
 export const PLATFORM_OPTIONS = [
   ...MARKETPLACE_PLATFORM_OPTIONS,
   ...DOMESTIC_PLATFORM_OPTIONS,
-  ...DTC_PLATFORM_OPTIONS.map((item) => ({
-    ...item,
-    label: `独立站 · ${item.label}`,
-  })),
+  ...DTC_PLATFORM_OPTIONS,
   ...OTHER_PLATFORM_OPTIONS,
 ]
+
+export function platformLabels(platforms) {
+  const map = Object.fromEntries(PLATFORM_OPTIONS.map((p) => [p.value, p.label]))
+  return platformDisplayLabels(platforms, map).join('、') || '—'
+}
 
 export const ROLE_OPTIONS = [
   'Temu 运营',
@@ -151,12 +158,4 @@ export const ROLE_OPTIONS = [
   '拼多多运营',
   '抖音运营',
   '视频号运营',
-  '仓储主管',
-  '客服专员',
-  '数据分析师',
 ]
-
-export function platformLabels(platforms) {
-  const map = Object.fromEntries(PLATFORM_OPTIONS.map((p) => [p.value, p.label]))
-  return (platforms || []).map((p) => map[p] || p).join('、') || '—'
-}

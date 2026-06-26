@@ -133,6 +133,8 @@ def seed_users(conn: sqlite3.Connection) -> None:
         ("admin@crosshub.cn", "12345678", "管理员", "泰州亿拓户外用品有限公司", "admin"),
         ("wangyiming@yituo-outdoor.com", "Emp@Demo123", "王一鸣", "泰州亿拓户外用品有限公司", "user"),
         ("liting@yituo-outdoor.com", "Emp@Demo456", "李婷", "泰州亿拓户外用品有限公司", "user"),
+        ("liuyang@yituo-outdoor.com", "Emp@Demo987", "刘洋", "泰州亿拓户外用品有限公司", "user"),
+        ("warehouse@yituo-outdoor.com", "Wh@Demo123", "张仓管", "泰州亿拓户外用品有限公司", "warehouse"),
     ]
     for username, password, nickname, enterprise, role in users:
         conn.execute(

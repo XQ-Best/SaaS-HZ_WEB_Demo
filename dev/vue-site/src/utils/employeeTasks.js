@@ -30,8 +30,16 @@ const PRIORITY_WEIGHT = { high: 0, medium: 1, low: 2 }
 const STATUS_WEIGHT = { 已逾期: 0, 进行中: 1, 待处理: 2, 已完成: 9 }
 
 function employeePlatformKeys(auth) {
-  const keys = new Set(auth?.employee?.platforms || [])
-  if (keys.has('shopify') || keys.has('wordpress')) keys.add('dtc')
+  const keys = new Set(
+    auth?.backendLinked
+      ? (auth.platforms || [])
+      : (auth?.employee?.platforms || []),
+  )
+  if (keys.has('dtc') || keys.has('shopify') || keys.has('wordpress')) {
+    keys.delete('shopify')
+    keys.delete('wordpress')
+    keys.add('dtc')
+  }
   return keys
 }
 

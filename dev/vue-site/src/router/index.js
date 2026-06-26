@@ -26,8 +26,10 @@ const router = createRouter({
       component: () => import('@/layouts/PortalLayout.vue'),
       meta: { role: 'boss' },
       children: [
-        { path: '', redirect: '/boss/employees' },
-        { path: 'employees', name: 'boss-employees', component: () => import('@/views/boss/EmployeeBindingView.vue'), meta: { title: '员工绑定', menuCode: 'boss.employees' } },
+        { path: '', redirect: '/boss/dashboard' },
+        { path: 'employees', name: 'boss-employees', component: () => import('@/views/boss/EmployeeBindingView.vue'), meta: { title: '运营绑定', menuCode: 'boss.employees' } },
+        { path: 'warehouse-sites', name: 'boss-warehouse-sites', component: () => import('@/views/boss/WarehouseSitesView.vue'), meta: { title: '仓库设置', menuCode: 'boss.warehouse_sites' } },
+        { path: 'warehouse-staff', name: 'boss-warehouse-staff', component: () => import('@/views/warehouse/WarehouseStaffBindingView.vue'), meta: { title: '仓库人员', menuCode: 'boss.warehouse_staff' } },
         { path: 'dashboard', name: 'boss-dashboard', component: () => import('@/views/boss/BossDashboardView.vue'), meta: { title: '运营总览', menuCode: 'boss.dashboard' } },
         { path: 'tasks', name: 'boss-tasks', component: () => import('@/views/boss/TaskAssignmentView.vue'), meta: { title: '任务分配', menuCode: 'boss.tasks' } },
         { path: 'temu', name: 'boss-temu', component: () => import('@/views/temu/TemuModuleView.vue'), meta: { title: 'Temu 运营', menuCode: 'boss.platform.temu' } },
@@ -40,6 +42,52 @@ const router = createRouter({
         { path: '1688', name: 'boss-1688', component: () => import('@/views/alibaba1688/Alibaba1688ModuleView.vue'), meta: { title: '1688 运营', menuCode: 'boss.platform.1688' } },
         { path: 'dtc', name: 'boss-dtc', component: () => import('@/views/dtc/DtcModuleView.vue'), meta: { title: '独立站运营', menuCode: 'boss.platform.dtc' } },
         { path: 'accounts', name: 'boss-accounts', component: () => import('@/views/boss/AccountBindingView.vue'), meta: { title: '账户绑定', menuCode: 'boss.accounts' } },
+        { path: 'warehouse-orders', name: 'boss-warehouse-orders', component: () => import('@/views/warehouse/WarehouseOrdersView.vue'), meta: { title: '仓库下单', menuCode: 'boss.warehouse' } },
+      ],
+    },
+    {
+      path: '/warehouse',
+      component: () => import('@/layouts/PortalLayout.vue'),
+      meta: { role: 'warehouse' },
+      children: [
+        { path: '', redirect: '/warehouse/pending-review' },
+        { path: 'orders', redirect: '/warehouse/pending-review' },
+        {
+          path: 'pending-review',
+          name: 'warehouse-pending-review',
+          component: () => import('@/views/warehouse/WarehouseOrdersView.vue'),
+          meta: {
+            title: '待审核',
+            menuCode: 'warehouse.pending_review',
+            orderStatusFilter: ['pending_review'],
+          },
+        },
+        {
+          path: 'pending-shipment',
+          name: 'warehouse-pending-shipment',
+          component: () => import('@/views/warehouse/WarehouseOrdersView.vue'),
+          meta: {
+            title: '待发货',
+            menuCode: 'warehouse.pending_shipment',
+            orderStatusFilter: ['pending_shipment', 'blocked'],
+          },
+        },
+        {
+          path: 'shipped',
+          name: 'warehouse-shipped',
+          component: () => import('@/views/warehouse/WarehouseOrdersView.vue'),
+          meta: {
+            title: '已发货',
+            menuCode: 'warehouse.shipped',
+            orderStatusFilter: ['shipped'],
+          },
+        },
+        {
+          path: 'tasks',
+          name: 'warehouse-tasks',
+          component: () => import('@/views/warehouse/WarehouseTasksView.vue'),
+          meta: { title: '任务中心', menuCode: 'warehouse.tasks' },
+        },
       ],
     },
     {
@@ -59,6 +107,7 @@ const router = createRouter({
         { path: 'channels', name: 'employee-channels', component: () => import('@/views/channels/ChannelsModuleView.vue'), meta: { title: '视频号运营', menuCode: 'employee.platform.channels' } },
         { path: '1688', name: 'employee-1688', component: () => import('@/views/alibaba1688/Alibaba1688ModuleView.vue'), meta: { title: '1688 运营', menuCode: 'employee.platform.1688' } },
         { path: 'dtc', name: 'employee-dtc', component: () => import('@/views/dtc/DtcModuleView.vue'), meta: { title: '独立站运营', menuCode: 'employee.platform.dtc' } },
+        { path: 'warehouse-orders', name: 'employee-warehouse-orders', component: () => import('@/views/warehouse/WarehouseOrdersView.vue'), meta: { title: '仓库下单', menuCode: 'employee.warehouse' } },
         { path: 'ai', name: 'employee-ai', component: () => import('@/views/employee/AiOfficeView.vue'), meta: { title: 'AI 办公', menuCode: 'employee.ai' } },
       ],
     },

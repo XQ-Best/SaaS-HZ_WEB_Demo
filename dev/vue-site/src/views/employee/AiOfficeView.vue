@@ -3,6 +3,8 @@ import { computed, ref } from 'vue'
 import { ChatDotRound, Cpu, Lightning } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { AI_CONTEXT_HINTS, AI_SKILL_GROUPS } from '@/constants/aiOffice'
+import { PLATFORM_OPTIONS } from '@/constants/employees'
+import { platformDisplayLabels } from '@/constants/platforms'
 import AiChatPanel from '@/components/ai/AiChatPanel.vue'
 
 const auth = useAuthStore()
@@ -10,17 +12,9 @@ const chatRef = ref(null)
 const activeGroup = ref(AI_SKILL_GROUPS[0].id)
 
 const platformLabels = computed(() => {
-  const map = {
-    temu: 'Temu',
-    aliexpress: 'AliExpress',
-    amazon: 'Amazon',
-    walmart: 'Walmart',
-    '1688': '1688',
-    shopify: 'Shopify',
-    wordpress: 'WordPress',
-  }
-  const labels = (auth.employee.platforms || []).map((p) => map[p] || p)
-  return [...new Set(labels)].join(' · ') || '运营'
+  const map = Object.fromEntries(PLATFORM_OPTIONS.map((p) => [p.value, p.label]))
+  const list = auth.backendLinked ? (auth.platforms || []) : (auth.employee.platforms || [])
+  return platformDisplayLabels(list, map).join(' · ') || '运营'
 })
 
 const activeSkills = computed(

@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { clearAccessToken, fetchBackendSession } from '@/api/request'
-import { decorateMenus, resolveSidebarMenus } from '@/utils/menuAuth'
+import { resolveSidebarMenus, flattenMenuPaths } from '@/utils/menuAuth'
+import { resolveWarehouseNames } from '@/utils/warehouseScope'
 
 function readJson(key, fallback) {
   try {
@@ -31,6 +32,14 @@ export const useAuthStore = defineStore('auth', () => {
       assignedStoreIds: [],
     }),
   )
+  const warehouse = ref(
+    readJson('crosshub_warehouse', {
+      id: '',
+      name: '',
+      account: '',
+      role: '',
+    }),
+  )
   const backendLinked = ref(localStorage.getItem('backend_linked') === '1')
   const backendUserId = ref(Number(localStorage.getItem('backend_user_id') || 0) || null)
   const backendRole = ref(localStorage.getItem('backend_role') || '')
@@ -38,32 +47,55 @@ export const useAuthStore = defineStore('auth', () => {
   const menus = ref(readJson('crosshub_menus', []))
   const platforms = ref(readJson('crosshub_platforms', []))
   const shopScope = ref(readJson('crosshub_shop_scope', []))
+  const warehouseScope = ref(readJson('crosshub_warehouse_scope', []))
+  const warehouseScopeNames = ref(readJson('crosshub_warehouse_scope_names', []))
 
   const isBoss = computed(() => role.value === 'boss')
-  const portalLabel = computed(() => (isBoss.value ? '企业管理员' : '员工端口'))
-  const displayName = computed(() =>
-    isBoss.value ? company.value.name : employee.value.name,
-  )
+  const isEmployee = computed(() => role.value === 'employee')
+  const isWarehouse = computed(() => role.value === 'warehouse')
+  const portalLabel = computed(() => {
+    if (isBoss.value) return '企业管理员'
+    if (isWarehouse.value) return '仓库端口'
+    return '员工端口'
+  })
+  const displayName = computed(() => {
+    if (isBoss.value) return company.value.name
+    if (isWarehouse.value) return warehouse.value.name
+    return employee.value.name
+  })
   const sidebarMenus = computed(() => resolveSidebarMenus({
     menus: menus.value,
     isBoss: isBoss.value,
+    isEmployee: isEmployee.value,
+    isWarehouse: isWarehouse.value,
     backendLinked: backendLinked.value,
     employee: employee.value,
+    warehouse: warehouse.value,
     platforms: platforms.value,
     role: role.value,
   }))
-  const menuPaths = computed(() => sidebarMenus.value.map((item) => item.path))
+  const assignedWarehouseLabels = computed(() => {
+    if (warehouseScopeNames.value.length) return warehouseScopeNames.value
+    if (warehouse.value.warehouseNames?.length) return warehouse.value.warehouseNames
+    return resolveWarehouseNames(warehouseScope.value.length
+      ? warehouseScope.value
+      : warehouse.value.warehouseIds || [])
+  })
+  const menuPaths = computed(() => flattenMenuPaths(sidebarMenus.value))
 
   function persistSession() {
     localStorage.setItem('crosshub_logged_in', isLoggedIn.value ? '1' : '0')
     localStorage.setItem('crosshub_role', role.value)
     localStorage.setItem('crosshub_company', JSON.stringify(company.value))
     localStorage.setItem('crosshub_employee', JSON.stringify(employee.value))
+    localStorage.setItem('crosshub_warehouse', JSON.stringify(warehouse.value))
     localStorage.setItem('backend_linked', backendLinked.value ? '1' : '0')
     localStorage.setItem('backend_role', backendRole.value || '')
     localStorage.setItem('crosshub_menus', JSON.stringify(menus.value))
     localStorage.setItem('crosshub_platforms', JSON.stringify(platforms.value))
     localStorage.setItem('crosshub_shop_scope', JSON.stringify(shopScope.value))
+    localStorage.setItem('crosshub_warehouse_scope', JSON.stringify(warehouseScope.value))
+    localStorage.setItem('crosshub_warehouse_scope_names', JSON.stringify(warehouseScopeNames.value))
     if (backendUserId.value) {
       localStorage.setItem('backend_user_id', String(backendUserId.value))
     } else {
@@ -80,6 +112,10 @@ export const useAuthStore = defineStore('auth', () => {
     menus.value = Array.isArray(payload.menus) ? payload.menus : []
     platforms.value = Array.isArray(payload.platforms) ? payload.platforms : []
     shopScope.value = Array.isArray(payload.shop_scope) ? payload.shop_scope : []
+    warehouseScope.value = Array.isArray(payload.warehouse_scope) ? payload.warehouse_scope : []
+    warehouseScopeNames.value = Array.isArray(payload.warehouse_scope_names)
+      ? payload.warehouse_scope_names
+      : resolveWarehouseNames(warehouseScope.value)
     if (payload.tenant_id) tenantId.value = payload.tenant_id
     if (payload.user_id) backendUserId.value = payload.user_id
     if (payload.role) backendRole.value = payload.role
@@ -87,7 +123,21 @@ export const useAuthStore = defineStore('auth', () => {
     persistSession()
   }
 
+  function applyLocalSession() {
+    backendLinked.value = false
+    backendRole.value = ''
+    backendUserId.value = null
+    tenantId.value = null
+    menus.value = []
+    platforms.value = []
+    shopScope.value = []
+    warehouseScope.value = []
+    warehouseScopeNames.value = []
+    clearAccessToken()
+  }
+
   function setCompany(payload) {
+    if (payload.backendLinked === false) applyLocalSession()
     company.value = {
       name: payload.company || payload.name,
       account: payload.account,
@@ -98,11 +148,41 @@ export const useAuthStore = defineStore('auth', () => {
     if (payload.menus) menus.value = payload.menus
     if (payload.platforms) platforms.value = payload.platforms
     if (payload.shop_scope) shopScope.value = payload.shop_scope
+    if (payload.warehouse_scope) warehouseScope.value = payload.warehouse_scope
     if (payload.tenant_id) tenantId.value = payload.tenant_id
     persistSession()
   }
 
+  function setWarehouse(payload) {
+    if (payload.backendLinked === false) applyLocalSession()
+    const scopeIds = payload.warehouseIds || payload.warehouse_scope || []
+    const scopeNames = payload.warehouse_scope_names
+      || payload.warehouseNames
+      || resolveWarehouseNames(scopeIds)
+    warehouse.value = {
+      id: payload.id || '',
+      name: payload.name,
+      account: payload.account,
+      role: payload.role,
+      phone: payload.phone || '',
+      warehouseIds: scopeIds,
+      warehouseNames: scopeNames,
+    }
+    if (payload.backendRole) backendRole.value = payload.backendRole
+    if (payload.backendUserId) backendUserId.value = payload.backendUserId
+    if (payload.backendLinked !== undefined) backendLinked.value = Boolean(payload.backendLinked)
+    if (payload.menus) menus.value = payload.menus
+    if (payload.warehouse_scope) warehouseScope.value = payload.warehouse_scope
+    if (payload.warehouse_scope_names) warehouseScopeNames.value = payload.warehouse_scope_names
+    else if (payload.warehouse_scope) warehouseScopeNames.value = resolveWarehouseNames(payload.warehouse_scope)
+    if (payload.tenant_id) tenantId.value = payload.tenant_id
+    warehouseScope.value = scopeIds
+    warehouseScopeNames.value = scopeNames
+    persistSession()
+  }
+
   function setEmployee(payload) {
+    if (payload.backendLinked === false) applyLocalSession()
     employee.value = {
       id: payload.id || '',
       name: payload.name,
@@ -110,6 +190,7 @@ export const useAuthStore = defineStore('auth', () => {
       role: payload.role,
       platforms: payload.platforms || [],
       assignedStoreIds: payload.assignedStoreIds || payload.shop_scope || [],
+      menuCodes: payload.menuCodes || payload.menu_codes || [],
     }
     if (payload.backendRole) backendRole.value = payload.backendRole
     if (payload.backendUserId) backendUserId.value = payload.backendUserId
@@ -130,10 +211,22 @@ export const useAuthStore = defineStore('auth', () => {
     const data = await fetchBackendSession()
     applyBackendSession(data)
     if (!isBoss.value && data) {
-      employee.value = {
-        ...employee.value,
-        platforms: data.platforms || employee.value.platforms,
-        assignedStoreIds: data.shop_scope || employee.value.assignedStoreIds,
+      if (isWarehouse.value) {
+        const scopeIds = data.warehouse_scope || warehouse.value.warehouseIds || []
+        const scopeNames = data.warehouse_scope_names || resolveWarehouseNames(scopeIds)
+        warehouse.value = {
+          ...warehouse.value,
+          warehouseIds: scopeIds,
+          warehouseNames: scopeNames,
+        }
+        warehouseScope.value = scopeIds
+        warehouseScopeNames.value = scopeNames
+      } else {
+        employee.value = {
+          ...employee.value,
+          platforms: data.platforms || employee.value.platforms,
+          assignedStoreIds: data.shop_scope || employee.value.assignedStoreIds,
+        }
       }
       persistSession()
     }
@@ -154,6 +247,9 @@ export const useAuthStore = defineStore('auth', () => {
     menus.value = []
     platforms.value = []
     shopScope.value = []
+    warehouseScope.value = []
+    warehouseScopeNames.value = []
+    warehouse.value = { id: '', name: '', account: '', role: '', warehouseIds: [], warehouseNames: [] }
     clearAccessToken()
     localStorage.removeItem('crosshub_logged_in')
     localStorage.removeItem('backend_linked')
@@ -163,6 +259,8 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem('crosshub_menus')
     localStorage.removeItem('crosshub_platforms')
     localStorage.removeItem('crosshub_shop_scope')
+    localStorage.removeItem('crosshub_warehouse_scope')
+    localStorage.removeItem('crosshub_warehouse_scope_names')
   }
 
   return {
@@ -170,6 +268,7 @@ export const useAuthStore = defineStore('auth', () => {
     role,
     company,
     employee,
+    warehouse,
     backendLinked,
     backendUserId,
     backendRole,
@@ -177,13 +276,19 @@ export const useAuthStore = defineStore('auth', () => {
     menus,
     platforms,
     shopScope,
+    warehouseScope,
+    warehouseScopeNames,
+    assignedWarehouseLabels,
     isBoss,
+    isEmployee,
+    isWarehouse,
     portalLabel,
     displayName,
     sidebarMenus,
     menuPaths,
     setCompany,
     setEmployee,
+    setWarehouse,
     applyBackendSession,
     hasMenuCode,
     refreshSession,

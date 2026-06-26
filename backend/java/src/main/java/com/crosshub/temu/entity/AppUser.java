@@ -52,6 +52,7 @@ public class AppUser {
     public String getCreatedAt() { return createdAt; }
     public void setCreatedAt(String createdAt) { this.createdAt = createdAt; }
     public boolean isAdmin() { return "admin".equalsIgnoreCase(role); }
+    public boolean isWarehouse() { return "warehouse".equalsIgnoreCase(role); }
     public boolean isActive() {
         return status == null || status.isBlank() || "active".equalsIgnoreCase(status);
     }

@@ -93,7 +93,7 @@ onMounted(loadContext)
           <template #header>我的平台指标</template>
           <el-empty
             v-if="!loading && !platformSales.length"
-            description="暂无负责店铺数据，请联系企业管理员在员工绑定中分配店铺"
+            description="暂无负责店铺数据，请联系企业管理员在运营绑定中分配店铺"
           />
           <el-table v-else :data="platformSales" size="small">
             <el-table-column prop="name" label="平台" />

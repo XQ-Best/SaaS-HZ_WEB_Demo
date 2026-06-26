@@ -59,11 +59,23 @@ public class AuthController {
         if ("boss".equals(portalRole) && !user.isAdmin()) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "该账号不是企业管理员");
         }
+        if ("warehouse".equals(portalRole) && !user.isWarehouse()) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "该账号不是仓库用户");
+        }
+        if ("employee".equals(portalRole) && (user.isAdmin() || user.isWarehouse())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "请使用对应端口登录");
+        }
 
         boolean bossPortal = "boss".equalsIgnoreCase(portalRole);
         List<String> platforms = dataScopeService.resolvePlatformsForLogin(user.getTenantId(), user.getId(), bossPortal);
         List<String> shopScope = dataScopeService.resolveScopeForLogin(user.getTenantId(), user.getId(), bossPortal);
-        String token = jwtService.createToken(user, portalRole, platforms, shopScope);
+        List<String> warehouseScope = dataScopeService.resolveWarehouseScopeForLogin(
+                user.getTenantId(), user.getId(), portalRole
+        );
+        List<String> warehouseScopeNames = dataScopeService.resolveWarehouseScopeNamesForLogin(
+                user.getTenantId(), user.getId(), portalRole
+        );
+        String token = jwtService.createToken(user, portalRole, platforms, shopScope, warehouseScope);
         List<Map<String, Object>> menus = menuService.menusForUser(user, portalRole);
 
         Map<String, Object> data = new LinkedHashMap<>();
@@ -78,6 +90,8 @@ public class AuthController {
         data.put("job_title", user.getJobTitle());
         data.put("platforms", platforms);
         data.put("shop_scope", shopScope);
+        data.put("warehouse_scope", warehouseScope);
+        data.put("warehouse_scope_names", warehouseScopeNames);
         data.put("menus", menus);
 
         return Map.of("code", 0, "data", data);
@@ -124,6 +138,10 @@ public class AuthController {
         data.put("nickname", user.getNickname());
         data.put("platforms", authContext.platforms());
         data.put("shop_scope", authContext.shopScope());
+        data.put("warehouse_scope", authContext.warehouseScope());
+        data.put("warehouse_scope_names", dataScopeService.resolveWarehouseScopeNamesForLogin(
+                authContext.tenantId(), userId, portalRole
+        ));
         data.put("menus", menuService.menusForUser(user, portalRole));
         return Map.of("code", 0, "data", data);
     }
