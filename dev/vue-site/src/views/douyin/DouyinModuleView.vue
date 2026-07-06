@@ -13,6 +13,7 @@ import PageScroll from '@/components/common/PageScroll.vue'
 import DomesticBossOverview from '@/components/domestic/DomesticBossOverview.vue'
 import DomesticOrdersPanel from '@/components/domestic/DomesticOrdersPanel.vue'
 import DomesticIssuesPanel from '@/components/domestic/DomesticIssuesPanel.vue'
+import PlatformShipPushDialog from '@/components/domestic/PlatformShipPushDialog.vue'
 
 const {
   auth,
@@ -40,7 +41,15 @@ const {
   handleResolveIssue,
   goToAccountBinding,
   handleOverviewNavigate,
+  openShipDialog,
+  submitShipPush,
+  shipDialogVisible,
+  shipDialogOrder,
+  shipDialogType,
+  shipSubmitting,
+  platformLabel,
 } = useDomesticModule({
+  platformKey: 'douyin',
   fetchStores: fetchDouyinStores,
   fetchOrders: fetchTodayDouyinOrders,
   loadIssues: loadDouyinIssues,
@@ -110,6 +119,8 @@ const {
               show-channel-column
               orders-description="直播、短视频与商城订单"
               @refresh="syncTodayOrders(true)"
+              @ship-push="openShipDialog($event, 'push')"
+              @ship-urge="openShipDialog($event, 'urge')"
             />
           </div>
         </el-tab-pane>
@@ -136,6 +147,17 @@ const {
           </div>
         </el-tab-pane>
       </el-tabs>
+
+      <PlatformShipPushDialog
+        v-model="shipDialogVisible"
+        :order="shipDialogOrder"
+        platform-key="douyin"
+        :platform-label="platformLabel"
+        :store-name="shipDialogOrder ? storeNameMap[shipDialogOrder.storeId] : ''"
+        :request-type="shipDialogType"
+        :submitting="shipSubmitting"
+        @submit="submitShipPush"
+      />
     </template>
   </PageScroll>
 </template>

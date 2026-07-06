@@ -46,6 +46,12 @@ const itemSummary = computed(() => summarizeItems(props.order?.items || []))
         <el-descriptions-item label="下单人">{{ order.submittedByName }}</el-descriptions-item>
         <el-descriptions-item label="货源类型">{{ sourceTypeLabel }}</el-descriptions-item>
         <el-descriptions-item label="来源">{{ order.sourceLabel }}</el-descriptions-item>
+        <el-descriptions-item v-if="order.platformOrderNo" label="平台订单">
+          {{ order.platformOrderNo }}
+          <el-tag v-if="order.shipRequestType === 'urge'" type="warning" size="small" effect="plain">
+            含催促
+          </el-tag>
+        </el-descriptions-item>
         <el-descriptions-item label="货品汇总">
           {{ itemSummary.skuCount }} 种 / 共 {{ itemSummary.totalQty }} 件
         </el-descriptions-item>
@@ -87,6 +93,22 @@ const itemSummary = computed(() => summarizeItems(props.order?.items || []))
           <em>{{ formatFileSize(file.size) }}</em>
         </li>
       </ul>
+
+      <template v-if="order.shipUrges?.length">
+        <h4 class="section-title">发货催促</h4>
+        <el-timeline class="urge-timeline">
+          <el-timeline-item
+            v-for="item in order.shipUrges"
+            :key="item.id"
+            :timestamp="item.at"
+            type="warning"
+            placement="top"
+          >
+            <strong>{{ item.byName || '运营' }}</strong>
+            <p>{{ item.remark || '催促发货' }}</p>
+          </el-timeline-item>
+        </el-timeline>
+      </template>
 
       <template v-if="order.warehouseReview">
         <h4 class="section-title">仓库反馈</h4>

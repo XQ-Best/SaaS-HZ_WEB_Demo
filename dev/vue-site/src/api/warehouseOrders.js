@@ -83,17 +83,29 @@ function resolveEmployeeFilter(auth) {
 }
 
 export async function fetchWarehouseOrders(auth, filters = {}) {
+  const employeeFilter = resolveEmployeeFilter(auth)
+  const warehouseScope = resolveWarehouseScope(auth)
+
   if (canUseWarehouseBackend(auth)) {
     const data = await fetchBackendWarehouseOrders()
     let orders = data?.orders || []
+    const localQuery = { ...filters, ...employeeFilter }
+    if (warehouseScope) localQuery.warehouseIds = warehouseScope
+    const localPlatformOrders = fetchLocalWarehouseOrders(localQuery)
+      .filter((item) => item.fromPlatformOrder)
+    const knownIds = new Set(orders.map((item) => item.id))
+    orders = [
+      ...orders,
+      ...localPlatformOrders.filter((item) => !knownIds.has(item.id)),
+    ]
     if (filters.status) {
       orders = orders.filter((item) => item.status === filters.status)
     }
-    return { data: orders, stats: data?.stats || warehouseOrderStats(orders) }
+    orders.sort((a, b) => String(b.submittedAt).localeCompare(String(a.submittedAt)))
+    return { data: orders, stats: warehouseOrderStats(orders) }
   }
 
-  const query = { ...filters, ...resolveEmployeeFilter(auth) }
-  const warehouseScope = resolveWarehouseScope(auth)
+  const query = { ...filters, ...employeeFilter }
   if (warehouseScope) query.warehouseIds = warehouseScope
   const orders = fetchLocalWarehouseOrders(query)
   return { data: orders, stats: warehouseOrderStats(orders) }
@@ -101,7 +113,12 @@ export async function fetchWarehouseOrders(auth, filters = {}) {
 
 export async function fetchWarehouseOrder(id, auth) {
   if (canUseWarehouseBackend(auth)) {
-    return fetchBackendWarehouseOrder(id)
+    try {
+      const order = await fetchBackendWarehouseOrder(id)
+      if (order) return order
+    } catch {
+      /* 平台推送的出库单仅存于 localStorage */
+    }
   }
   return fetchLocalWarehouseOrderById(id)
 }

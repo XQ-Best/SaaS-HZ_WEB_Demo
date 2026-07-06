@@ -33,6 +33,7 @@ const hotBroadcasts = ref(loadHotBroadcasts())
 const salesTrend = ref({ labels: [], values: [] })
 
 const useBackendData = computed(() => canUseTemuBackend(auth))
+const useDemoData = computed(() => !useBackendData.value)
 const scopedStoreIds = computed(() => scopeStoreIds(temuStores.value, auth))
 
 const storeNameMap = computed(() =>
@@ -85,10 +86,6 @@ const alertCount = computed(() => {
 })
 
 async function loadTemuStores() {
-  if (!useBackendData.value) {
-    temuStores.value = []
-    return
-  }
   try {
     temuStores.value = await fetchTemuStores(auth)
   } catch (err) {
@@ -98,8 +95,7 @@ async function loadTemuStores() {
 }
 
 async function loadProducts() {
-  if (!useBackendData.value) {
-    loadError.value = '请使用后端账号登录，并确保已启动 Java API（:8080）与爬虫入库'
+  if (!temuStores.value.length) {
     productsRaw.value = []
     return
   }
@@ -114,7 +110,10 @@ async function loadProducts() {
     productsRaw.value = result.products
     hotBroadcasts.value = seedBroadcastsFromOverload(result.products)
     if (auth.isBoss) {
-      salesTrend.value = await fetchTemuSalesTrend({ shopId: selectedStoreId.value })
+      salesTrend.value = await fetchTemuSalesTrend({
+        auth,
+        shopId: selectedStoreId.value,
+      })
     }
   } catch (err) {
     productsRaw.value = []
@@ -156,6 +155,7 @@ watch(selectedStoreId, () => {
             </el-radio-button>
           </el-radio-group>
           <el-tag v-if="useBackendData" type="success" size="small">后端实时数据</el-tag>
+          <el-tag v-else-if="useDemoData" type="info" size="small">Demo 样本数据</el-tag>
         </el-space>
       </div>
 
@@ -181,7 +181,7 @@ watch(selectedStoreId, () => {
       :image-size="96"
     >
       <el-text type="info" size="small">
-        请先运行 Python 爬虫入库，并用后端账号登录（Boss: admin@crosshub.cn / 12345678）
+        Boss 请在「运营绑定」确认 Temu 店铺；员工需被分配 Temu 平台或负责店铺
       </el-text>
     </el-empty>
 
@@ -240,7 +240,7 @@ watch(selectedStoreId, () => {
             <template #label>
               <span>竞店分析</span>
             </template>
-            <CompetitorAnalysis :use-backend-data="useBackendData" />
+            <CompetitorAnalysis />
           </el-tab-pane>
         </el-tabs>
       </div>

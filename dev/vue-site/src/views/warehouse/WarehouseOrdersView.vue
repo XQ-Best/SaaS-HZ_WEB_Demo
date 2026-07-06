@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onActivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Plus, Refresh, View } from '@element-plus/icons-vue'
@@ -14,6 +14,7 @@ import {
   createWarehouseOrder,
   deleteWarehouseOrder,
   fetchWarehouseOrders,
+  fetchWarehouseOrder,
   markWarehouseOrderShipped,
   releaseBlockedWarehouseOrder,
   submitWarehouseReview,
@@ -73,12 +74,35 @@ const pageDescription = computed(() => {
 })
 
 const filteredOrders = computed(() => {
+  let list = orders.value
   if (routeStatusFilter.value?.length) {
-    return orders.value.filter((item) => routeStatusFilter.value.includes(item.status))
+    list = list.filter((item) => routeStatusFilter.value.includes(item.status))
+  } else if (filterStatus.value !== 'all') {
+    list = list.filter((item) => item.status === filterStatus.value)
   }
-  if (filterStatus.value === 'all') return orders.value
-  return orders.value.filter((item) => item.status === filterStatus.value)
+  return [...list].sort((a, b) => {
+    const urgeA = a.lastUrgedAt || ''
+    const urgeB = b.lastUrgedAt || ''
+    if (urgeA && urgeB) return urgeB.localeCompare(urgeA)
+    if (urgeA) return -1
+    if (urgeB) return 1
+    return String(b.submittedAt).localeCompare(String(a.submittedAt))
+  })
 })
+
+function rowClassName({ row }) {
+  return row.shipUrges?.length ? 'order-row--urged' : ''
+}
+
+async function refreshActiveOrder() {
+  if (!activeOrder.value?.id) return
+  try {
+    const fresh = await fetchWarehouseOrder(activeOrder.value.id, auth)
+    if (fresh) activeOrder.value = fresh
+  } catch {
+    /* ignore */
+  }
+}
 
 const canCreate = computed(() => auth.isBoss || auth.isEmployee)
 
@@ -95,8 +119,13 @@ async function loadOrders() {
   }
 }
 
-function openDetail(order) {
-  activeOrder.value = order
+async function openDetail(order) {
+  try {
+    const fresh = await fetchWarehouseOrder(order.id, auth)
+    activeOrder.value = fresh || order
+  } catch {
+    activeOrder.value = order
+  }
   detailVisible.value = true
 }
 
@@ -189,7 +218,27 @@ watch(() => route.path, () => {
   if (auth.isWarehouse) detailVisible.value = false
 })
 
-onMounted(loadOrders)
+function handleWarehouseOrdersChanged() {
+  loadOrders()
+  if (detailVisible.value) refreshActiveOrder()
+}
+
+function handleStorageChange(event) {
+  if (event.key === 'crosshub_warehouse_orders') handleWarehouseOrdersChanged()
+}
+
+onMounted(() => {
+  loadOrders()
+  window.addEventListener('crosshub-warehouse-orders-changed', handleWarehouseOrdersChanged)
+  window.addEventListener('storage', handleStorageChange)
+})
+
+onActivated(loadOrders)
+
+onUnmounted(() => {
+  window.removeEventListener('crosshub-warehouse-orders-changed', handleWarehouseOrdersChanged)
+  window.removeEventListener('storage', handleStorageChange)
+})
 </script>
 
 <template>
@@ -241,10 +290,38 @@ onMounted(loadOrders)
       </el-radio-group>
     </div>
 
-    <el-table v-loading="loading" :data="filteredOrders" border stripe class="order-table">
+    <el-table
+      v-loading="loading"
+      :data="filteredOrders"
+      :row-class-name="rowClassName"
+      border
+      stripe
+      class="order-table"
+    >
       <el-table-column prop="orderNo" label="单号" width="140" />
       <el-table-column prop="warehouseName" label="出库仓库" width="120" show-overflow-tooltip />
       <el-table-column prop="sourceLabel" label="货源" min-width="160" show-overflow-tooltip />
+      <el-table-column label="平台单号" width="140" show-overflow-tooltip>
+        <template #default="{ row }">
+          <template v-if="row.platformOrderNo">
+            {{ row.platformOrderNo }}
+          </template>
+          <el-text v-else type="info" size="small">—</el-text>
+        </template>
+      </el-table-column>
+      <el-table-column label="催促" width="120" align="center">
+        <template #default="{ row }">
+          <template v-if="row.shipUrges?.length">
+            <el-tag type="warning" size="small" effect="dark">
+              催 {{ row.shipUrges.length }}
+            </el-tag>
+            <el-text v-if="row.lastUrgedAt" size="small" type="warning" class="urge-time">
+              {{ row.lastUrgedAt.slice(5, 16) }}
+            </el-text>
+          </template>
+          <el-text v-else type="info" size="small">—</el-text>
+        </template>
+      </el-table-column>
       <el-table-column label="货品" min-width="140" show-overflow-tooltip>
         <template #default="{ row }">
           {{ row.items?.map((i) => i.productName).join('、') }}
@@ -408,6 +485,17 @@ onMounted(loadOrders)
 
 .order-table {
   flex: 1;
+}
+
+.order-table :deep(.order-row--urged) {
+  background-color: var(--el-color-warning-light-9) !important;
+}
+
+.urge-time {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.2;
 }
 
 @media (max-width: 960px) {

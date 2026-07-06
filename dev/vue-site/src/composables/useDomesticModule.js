@@ -5,11 +5,14 @@ import { useAuthStore } from '@/stores/auth'
 import { scopeStores } from '@/utils/scope'
 import { useStoreAssignees } from '@/composables/useStoreAssignees'
 import { enrichDomesticIssue } from '@/utils/domesticPlatform'
+import { domesticPlatformLabel } from '@/constants/platforms'
+import { pushPlatformOrderToWarehouse, enrichOrdersWithWarehouseFeedback } from '@/api/platformShipRequests'
 import PageHeader from '@/components/common/PageHeader.vue'
 import PageScroll from '@/components/common/PageScroll.vue'
 import DomesticBossOverview from '@/components/domestic/DomesticBossOverview.vue'
 import DomesticOrdersPanel from '@/components/domestic/DomesticOrdersPanel.vue'
 import DomesticIssuesPanel from '@/components/domestic/DomesticIssuesPanel.vue'
+import PlatformShipPushDialog from '@/components/domestic/PlatformShipPushDialog.vue'
 
 export function useDomesticModule(config) {
   const auth = useAuthStore()
@@ -28,6 +31,13 @@ export function useDomesticModule(config) {
   const loadingIssues = ref(false)
   const issuesPanel = ref(null)
   const issuesFilter = ref('all')
+  const shipDialogVisible = ref(false)
+  const shipDialogOrder = ref(null)
+  const shipDialogType = ref('push')
+  const shipSubmitting = ref(false)
+
+  const platformKey = config.platformKey || ''
+  const platformLabel = computed(() => domesticPlatformLabel(platformKey) || platformKey)
 
   const storeNameMap = computed(() =>
     Object.fromEntries(stores.value.map((store) => [store.id, store.storeName])),
@@ -74,7 +84,7 @@ export function useDomesticModule(config) {
     loadingOrders.value = true
     try {
       const res = await config.fetchOrders(stores.value, { refresh })
-      todayOrders.value = res.data.orders
+      todayOrders.value = enrichOrdersWithWarehouseFeedback(res.data.orders)
       ordersSyncedAt.value = res.data.syncedAt
       if (refresh) ElMessage.success(res.message || '已刷新今日订单')
     } catch (err) {
@@ -158,6 +168,38 @@ export function useDomesticModule(config) {
     activeTab.value = target
   }
 
+  function openShipDialog(order, type) {
+    shipDialogOrder.value = order
+    shipDialogType.value = type
+    shipDialogVisible.value = true
+  }
+
+  async function submitShipPush({ warehouseId, type, remark }) {
+    if (!shipDialogOrder.value || !platformKey) return
+    shipSubmitting.value = true
+    try {
+      const res = await pushPlatformOrderToWarehouse(auth, {
+        platformKey,
+        order: shipDialogOrder.value,
+        storeName: storeNameMap.value[shipDialogOrder.value.storeId] || '',
+        warehouseId,
+        type,
+        remark,
+      })
+      const updated = res.data?.platformOrder
+      if (updated) {
+        const index = todayOrders.value.findIndex((item) => item.id === updated.id)
+        if (index !== -1) todayOrders.value[index] = updated
+      }
+      ElMessage.success(res.message)
+      shipDialogVisible.value = false
+    } catch (err) {
+      ElMessage.error(err.message || '操作失败')
+    } finally {
+      shipSubmitting.value = false
+    }
+  }
+
   watch(stores, (list) => {
     if (selectedStoreId.value === 'all') return
     if (!list.some((store) => store.id === selectedStoreId.value)) {
@@ -197,6 +239,14 @@ export function useDomesticModule(config) {
     handleResolveIssue,
     goToAccountBinding,
     handleOverviewNavigate,
+    openShipDialog,
+    submitShipPush,
+    shipDialogVisible,
+    shipDialogOrder,
+    shipDialogType,
+    shipSubmitting,
+    platformKey,
+    platformLabel,
     config,
   }
 }

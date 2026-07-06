@@ -7,11 +7,13 @@ import { loadAlibaba1688OperationalData } from '@/api/alibaba1688'
 import { fetchAlibaba1688Stores } from '@/api/platformAccounts'
 import { scopeStores } from '@/utils/scope'
 import { useStoreAssignees } from '@/composables/useStoreAssignees'
+import { pushPlatformOrderToWarehouse, enrichOrdersWithWarehouseFeedback } from '@/api/platformShipRequests'
 import PageHeader from '@/components/common/PageHeader.vue'
 import PageScroll from '@/components/common/PageScroll.vue'
 import Alibaba1688BossOverview from '@/components/alibaba1688/Alibaba1688BossOverview.vue'
 import Alibaba1688PurchasePanel from '@/components/alibaba1688/Alibaba1688PurchasePanel.vue'
 import Alibaba1688SupplierPanel from '@/components/alibaba1688/Alibaba1688SupplierPanel.vue'
+import PlatformShipPushDialog from '@/components/domestic/PlatformShipPushDialog.vue'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -23,6 +25,10 @@ const purchaseOrders = ref([])
 const supplierAlerts = ref([])
 const syncedAt = ref('')
 const loadingStores = ref(false)
+const shipDialogVisible = ref(false)
+const shipDialogOrder = ref(null)
+const shipDialogType = ref('push')
+const shipSubmitting = ref(false)
 
 const storeNameMap = computed(() =>
   Object.fromEntries(stores1688.value.map((store) => [store.id, store.storeName])),
@@ -67,7 +73,7 @@ async function loadModuleData() {
     stores1688.value = scopeStores(res.data || [], auth)
     if (stores1688.value.length) {
       const demoRes = loadAlibaba1688OperationalData(stores1688.value)
-      purchaseOrders.value = demoRes.data.purchaseOrders
+      purchaseOrders.value = enrichOrdersWithWarehouseFeedback(demoRes.data.purchaseOrders)
       supplierAlerts.value = demoRes.data.supplierAlerts
       syncedAt.value = demoRes.data.syncedAt
     } else {
@@ -88,7 +94,7 @@ async function loadModuleData() {
 function refreshData() {
   if (!stores1688.value.length) return
   const demoRes = loadAlibaba1688OperationalData(stores1688.value)
-  purchaseOrders.value = demoRes.data.purchaseOrders
+  purchaseOrders.value = enrichOrdersWithWarehouseFeedback(demoRes.data.purchaseOrders)
   supplierAlerts.value = demoRes.data.supplierAlerts
   syncedAt.value = demoRes.data.syncedAt
   ElMessage.success('已刷新 1688 运营数据')
@@ -96,6 +102,38 @@ function refreshData() {
 
 function goToAccountBinding() {
   router.push(auth.isBoss ? '/boss/accounts' : '/employee/dashboard')
+}
+
+function openShipDialog(order, type) {
+  shipDialogOrder.value = order
+  shipDialogType.value = type
+  shipDialogVisible.value = true
+}
+
+async function submitShipPush({ warehouseId, type, remark }) {
+  if (!shipDialogOrder.value) return
+  shipSubmitting.value = true
+  try {
+    const res = await pushPlatformOrderToWarehouse(auth, {
+      platformKey: '1688',
+      order: shipDialogOrder.value,
+      storeName: storeNameMap.value[shipDialogOrder.value.storeId] || '',
+      warehouseId,
+      type,
+      remark,
+    })
+    const updated = res.data?.platformOrder
+    if (updated) {
+      const index = purchaseOrders.value.findIndex((item) => item.id === updated.id)
+      if (index !== -1) purchaseOrders.value[index] = updated
+    }
+    ElMessage.success(res.message)
+    shipDialogVisible.value = false
+  } catch (err) {
+    ElMessage.error(err.message || '操作失败')
+  } finally {
+    shipSubmitting.value = false
+  }
 }
 
 watch(stores1688, (stores) => {
@@ -173,6 +211,8 @@ onActivated(loadModuleData)
               :show-store-column="showStoreColumn"
               :store-name-map="storeNameMap"
               @refresh="refreshData"
+              @ship-push="openShipDialog($event, 'push')"
+              @ship-urge="openShipDialog($event, 'urge')"
             />
           </div>
         </el-tab-pane>
@@ -194,6 +234,17 @@ onActivated(loadModuleData)
           </div>
         </el-tab-pane>
       </el-tabs>
+
+      <PlatformShipPushDialog
+        v-model="shipDialogVisible"
+        :order="shipDialogOrder"
+        platform-key="1688"
+        platform-label="1688"
+        :store-name="shipDialogOrder ? storeNameMap[shipDialogOrder.storeId] : ''"
+        :request-type="shipDialogType"
+        :submitting="shipSubmitting"
+        @submit="submitShipPush"
+      />
     </template>
   </PageScroll>
 </template>

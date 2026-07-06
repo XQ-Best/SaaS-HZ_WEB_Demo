@@ -5,6 +5,11 @@ import { applyServerAlgorithms } from '@/utils/temuServerAlgo'
 import { scopeStores } from '@/utils/scope'
 import { getAccessToken } from './request'
 import { isTemuBackendEnabled } from './config'
+import {
+  fetchLocalTemuSalesTrend,
+  fetchLocalTemuStores,
+  loadLocalTemuOperationalData,
+} from './temuDemoLocal'
 
 const TEMU_PLATFORM = 'temu'
 
@@ -14,15 +19,18 @@ export function canUseTemuBackend(auth) {
 }
 
 export async function fetchTemuStores(auth) {
-  const res = await service.get('/api/temu/shops', { skipGlobalErrorToast: true })
-  const list = res?.data ?? []
-  const stores = (Array.isArray(list) ? list : []).map((shop) => ({
-    id: shop.shop_id,
-    storeName: shop.shop_name || shop.shop_id,
-    platform: TEMU_PLATFORM,
-    isUpload: shop.is_upload,
-  }))
-  return scopeStores(stores, auth)
+  if (canUseTemuBackend(auth)) {
+    const res = await service.get('/api/temu/shops', { skipGlobalErrorToast: true })
+    const list = res?.data ?? []
+    const stores = (Array.isArray(list) ? list : []).map((shop) => ({
+      id: shop.shop_id,
+      storeName: shop.shop_name || shop.shop_id,
+      platform: TEMU_PLATFORM,
+      isUpload: shop.is_upload,
+    }))
+    return scopeStores(stores, auth)
+  }
+  return fetchLocalTemuStores(auth)
 }
 
 export async function fetchTemuOperationalData({ shopId } = {}) {
@@ -52,19 +60,22 @@ export async function fetchTemuOperationalData({ shopId } = {}) {
   }
 }
 
-export async function fetchTemuSalesTrend({ shopId, days = 7 } = {}) {
-  const params = { days }
-  if (shopId && shopId !== 'all') params.shop_id = shopId
-  const res = await service.get('/api/temu/trend', { params })
-  return {
-    labels: res.labels || [],
-    values: res.values || [],
+export async function fetchTemuSalesTrend({ auth, shopId, days = 7 } = {}) {
+  if (canUseTemuBackend(auth)) {
+    const params = { days }
+    if (shopId && shopId !== 'all') params.shop_id = shopId
+    const res = await service.get('/api/temu/trend', { params })
+    return {
+      labels: res.labels || [],
+      values: res.values || [],
+    }
   }
+  return fetchLocalTemuSalesTrend({ shopId, days })
 }
 
 export async function loadTemuModuleData({ auth, shopId }) {
-  if (!canUseTemuBackend(auth)) {
-    throw new Error('请先使用后端账号登录（需启动 Java API）')
+  if (canUseTemuBackend(auth)) {
+    return fetchTemuOperationalData({ shopId })
   }
-  return fetchTemuOperationalData({ shopId })
+  return loadLocalTemuOperationalData({ shopId })
 }

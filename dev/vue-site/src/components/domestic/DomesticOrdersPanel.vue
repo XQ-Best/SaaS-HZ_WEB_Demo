@@ -3,6 +3,11 @@ import { computed } from 'vue'
 import { DOMESTIC_ORDER_STATUS_TYPE } from '@/constants/domesticShared'
 import { summarizeDomesticOrders } from '@/utils/domesticPlatform'
 import { formatMoneyDecimal } from '@/utils/format'
+import {
+  canPushPlatformOrder,
+  canUrgePlatformOrder,
+  shipRequestMeta,
+} from '@/utils/platformShipToWarehouse'
 import DomesticPanelHeader from '@/components/domestic/DomesticPanelHeader.vue'
 import AssigneeTableColumn from '@/components/common/AssigneeTableColumn.vue'
 
@@ -14,9 +19,10 @@ const props = defineProps({
   storeNameMap: { type: Object, default: () => ({}) },
   showChannelColumn: { type: Boolean, default: false },
   ordersDescription: { type: String, default: '今日待处理与已发货订单' },
+  showShipActions: { type: Boolean, default: true },
 })
 
-defineEmits(['refresh'])
+defineEmits(['refresh', 'ship-push', 'ship-urge'])
 
 const summary = computed(() => summarizeDomesticOrders(props.orders))
 
@@ -71,6 +77,70 @@ function statusType(order) {
           <el-tag :type="statusType(row)" size="small">{{ row.status }}</el-tag>
         </template>
       </el-table-column>
+      <el-table-column v-if="showShipActions" label="仓库" min-width="160" show-overflow-tooltip>
+        <template #default="{ row }">
+          <template v-if="shipRequestMeta(row)">
+            <div class="warehouse-cell">
+              <div class="warehouse-cell__row">
+                <el-tag size="small" type="info" effect="plain">
+                  {{ shipRequestMeta(row).warehouseName }}
+                </el-tag>
+                <el-text size="small" type="info">
+                  {{ shipRequestMeta(row).warehouseStatusLabel }}
+                </el-text>
+                <el-tag
+                  v-if="shipRequestMeta(row).urgeCount"
+                  type="warning"
+                  size="small"
+                  effect="plain"
+                >
+                  催 {{ shipRequestMeta(row).urgeCount }}
+                </el-tag>
+              </div>
+              <el-tooltip
+                v-if="shipRequestMeta(row).hasFeedback"
+                :content="shipRequestMeta(row).feedbackDetail"
+                placement="top"
+                :show-after="300"
+              >
+                <el-text size="small" :type="row.warehouseStatus === 'blocked' ? 'danger' : 'success'" class="warehouse-cell__feedback">
+                  {{ shipRequestMeta(row).feedbackSummary }}
+                </el-text>
+              </el-tooltip>
+            </div>
+          </template>
+          <el-text v-else type="info" size="small">未推送</el-text>
+        </template>
+      </el-table-column>
+      <el-table-column v-if="showShipActions" label="操作" width="168" align="center" fixed="right">
+        <template #default="{ row }">
+          <el-button
+            v-if="canPushPlatformOrder(row)"
+            link
+            type="primary"
+            size="small"
+            @click="$emit('ship-push', row)"
+          >
+            推送发货
+          </el-button>
+          <el-button
+            v-if="canUrgePlatformOrder(row)"
+            link
+            type="warning"
+            size="small"
+            @click="$emit('ship-urge', row)"
+          >
+            催促发货
+          </el-button>
+          <el-text
+            v-if="!canPushPlatformOrder(row) && !canUrgePlatformOrder(row)"
+            type="success"
+            size="small"
+          >
+            {{ row.status === '已发货' ? '已发货' : '—' }}
+          </el-text>
+        </template>
+      </el-table-column>
     </el-table>
   </div>
 </template>
@@ -106,5 +176,22 @@ function statusType(order) {
 .mini-stat__label {
   font-size: 12px;
   color: var(--ch-text-muted, var(--el-text-color-secondary));
+}
+
+.warehouse-cell {
+  display: grid;
+  gap: 4px;
+}
+
+.warehouse-cell__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.warehouse-cell__feedback {
+  display: block;
+  line-height: 1.4;
 }
 </style>

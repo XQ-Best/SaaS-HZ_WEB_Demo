@@ -5,17 +5,29 @@ import {
   WAREHOUSE_ORDER_STORAGE_KEY,
 } from '@/constants/warehouseOrders'
 import { MARKETPLACE_PLATFORM_OPTIONS, DTC_PLATFORM_OPTIONS } from '@/constants/platforms'
+import { PLATFORM_ORDER_LABELS } from '@/constants/platformShipRequests'
 import { normalizeUploadedFiles } from '@/utils/warehouseOrders'
 import { findLocalWarehouseSite } from '@/api/warehouseSitesLocal'
+import { syncPlatformOrderFromWarehouseOrder } from '@/api/platformOrderWarehouseSync'
 
 const SEED_FLAG_KEY = 'crosshub_warehouse_orders_seeded'
 
-const PLATFORM_LABELS = Object.fromEntries(
-  [...MARKETPLACE_PLATFORM_OPTIONS, ...DTC_PLATFORM_OPTIONS].map((item) => [item.value, item.label]),
-)
+const PLATFORM_LABELS = {
+  ...Object.fromEntries(
+    [...MARKETPLACE_PLATFORM_OPTIONS, ...DTC_PLATFORM_OPTIONS].map((item) => [item.value, item.label]),
+  ),
+  ...PLATFORM_ORDER_LABELS,
+}
 
 function nowText() {
   return new Date().toISOString().replace('T', ' ').slice(0, 19)
+}
+
+function persistLinkedPlatformOrder(order) {
+  if (order?.fromPlatformOrder) {
+    syncPlatformOrderFromWarehouseOrder(order)
+  }
+  return order
 }
 
 function loadAll() {
@@ -29,6 +41,9 @@ function loadAll() {
 
 function saveAll(items) {
   localStorage.setItem(WAREHOUSE_ORDER_STORAGE_KEY, JSON.stringify(items))
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('crosshub-warehouse-orders-changed'))
+  }
 }
 
 function ensureSeed() {
@@ -103,6 +118,42 @@ export function fetchLocalWarehouseOrderById(id) {
   return loadAll().find((item) => item.id === id) || null
 }
 
+/** 运营/管理员催促发货 → 追加至出库单 */
+export function appendLocalWarehouseShipUrge(warehouseOrderId, { remark, submitter }) {
+  ensureSeed()
+  const items = loadAll()
+  const index = items.findIndex((item) => item.id === warehouseOrderId)
+  if (index === -1) throw new Error('出库单不存在')
+
+  const order = items[index]
+  if (order.status === 'shipped' || order.status === 'cancelled') {
+    throw new Error('出库单已完成或已取消，无法催促')
+  }
+
+  const urges = [...(order.shipUrges || [])]
+  urges.unshift({
+    id: `urge_${Date.now()}`,
+    type: 'urge',
+    remark: (remark || '').trim(),
+    by: submitter.id,
+    byName: submitter.name,
+    at: nowText(),
+  })
+
+  items[index] = {
+    ...order,
+    shipUrges: urges,
+    shipRequestType: 'urge',
+    lastUrgedAt: nowText(),
+    updatedAt: nowText(),
+    remark: [order.remark, `[催促 ${nowText()}] ${submitter.name}：${(remark || '').trim()}`]
+      .filter(Boolean)
+      .join('\n'),
+  }
+  saveAll(items)
+  return items[index]
+}
+
 export function createLocalWarehouseOrder(payload, submitter) {
   ensureSeed()
   const items = loadAll()
@@ -153,6 +204,12 @@ export function createLocalWarehouseOrder(payload, submitter) {
     submittedById: submitter.id,
     submittedByName: submitter.name,
     submittedAt: nowText(),
+    platformOrderId: payload.platformOrderId || '',
+    platformOrderNo: payload.platformOrderNo || '',
+    platformStoreId: payload.platformStoreId || '',
+    shipRequestType: payload.shipRequestType || '',
+    shipUrges: [],
+    fromPlatformOrder: Boolean(payload.fromPlatformOrder),
     warehouseReview: null,
     updatedAt: nowText(),
   }
@@ -193,7 +250,7 @@ export function submitLocalWarehouseReview(orderId, reviewPayload, reviewer) {
     updatedAt: nowText(),
   }
   saveAll(items)
-  return items[index]
+  return persistLinkedPlatformOrder(items[index])
 }
 
 export function updateLocalWarehouseOrderStatus(orderId, status) {
@@ -204,7 +261,7 @@ export function updateLocalWarehouseOrderStatus(orderId, status) {
   if (index === -1) throw new Error('订单不存在')
   items[index] = { ...items[index], status, updatedAt: nowText() }
   saveAll(items)
-  return items[index]
+  return persistLinkedPlatformOrder(items[index])
 }
 
 export function cancelLocalWarehouseOrder(orderId) {
@@ -258,7 +315,7 @@ export function releaseLocalBlockedWarehouseOrder(orderId, releasePayload, revie
     updatedAt: nowText(),
   }
   saveAll(items)
-  return items[index]
+  return persistLinkedPlatformOrder(items[index])
 }
 
 export function warehouseOrderStats(orders = []) {
