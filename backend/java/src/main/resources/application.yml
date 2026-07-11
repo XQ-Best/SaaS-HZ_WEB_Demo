@@ -12,8 +12,11 @@ crosshub:
 
 spring:
   datasource:
-    url: jdbc:sqlite:${crosshub.db-path}
+    url: jdbc:sqlite:${crosshub.db-path}?busy_timeout=30000
     driver-class-name: org.sqlite.JDBC
+    hikari:
+      connection-init-sql: "PRAGMA busy_timeout=30000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;"
+      maximum-pool-size: 8
   jpa:
     database-platform: org.hibernate.community.dialect.SQLiteDialect
     hibernate:

@@ -1,7 +1,7 @@
 import axios from 'axios'
 import { AppApiError, getAppErrorMessage, toAppApiError } from '@/utils/appErrorCode'
 import { service, getAccessToken } from './request'
-import { enrichAllProducts } from '@/utils/temu'
+import { enrichAllProducts, normalizeSalesLast7Days } from '@/utils/temu'
 import { hasBackendSession } from './backendSession'
 import { isTemuBackendEnabled, TEMU_API_BASE_URL } from './config'
 import {
@@ -33,7 +33,7 @@ export function formatAliExpressCrawlError(errorCode, message) {
 }
 
 export async function triggerAliExpressCrawl(options = {}) {
-  const body = {}
+  const body = { scope: options.scope || 'all' }
   if (options.reportTime) body.report_time = options.reportTime
 
   const token = getAccessToken()
@@ -69,16 +69,30 @@ export async function fetchAliExpressCrawlJob(jobId) {
 
 export async function refreshAliExpressDataWithCrawl(options = {}) {
   const started = await triggerAliExpressCrawl(options)
-  const jobId = started.job?.job_id
+  const jobId = started.job?.job_id || started.job?.jobId || started.job?.id
   if (!jobId) {
+    if (started.conflict) {
+      throw new AppApiError(
+        started.message || '已有爬取任务进行中，请稍后再试',
+        'CRAWL_IN_PROGRESS',
+      )
+    }
     throw new AppApiError('未获取到爬取任务 ID', 'CRAWL_PROCESS_FAILED')
   }
 
   const deadline = Date.now() + CRAWL_MAX_WAIT_MS
   while (Date.now() < deadline) {
     const job = await fetchAliExpressCrawlJob(jobId)
-    if (job.status === 'success') {
-      return { success: true, job, conflict: started.conflict }
+    if (job.status === 'success' || job.status === 'partial') {
+      return {
+        success: true,
+        partial: job.status === 'partial',
+        job,
+        conflict: started.conflict,
+        message: job.status === 'partial'
+          ? (job.error_message || '爬取已完成，但任务收尾异常，页面数据可能已更新')
+          : (started.conflict ? '已等待进行中的爬取任务完成' : ''),
+      }
     }
     if (job.status === 'failed') {
       throw new AppApiError(
@@ -150,7 +164,7 @@ export async function fetchAliExpressOperationalData({ storeId } = {}) {
     localStock: row.localStock ?? row.local_stock,
     daysWithoutSale: row.daysWithoutSale ?? row.days_without_sale,
     dailySales: row.dailySales ?? row.daily_sales,
-    salesLast7Days: row.salesLast7Days ?? row.sales_last7_days ?? [],
+    salesLast7Days: normalizeSalesLast7Days(row.salesLast7Days ?? row.sales_last7_days),
     owner: row.owner || '',
   })))
   return {

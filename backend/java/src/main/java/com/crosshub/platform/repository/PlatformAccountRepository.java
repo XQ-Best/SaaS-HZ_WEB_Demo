@@ -13,6 +13,10 @@ public interface PlatformAccountRepository extends JpaRepository<PlatformAccount
 
     Optional<PlatformAccount> findByIdAndTenantId(String id, Long tenantId);
 
+    Optional<PlatformAccount> findFirstByTenantIdAndPlatformAndExternalShopIdOrderByBoundAtDesc(
+            Long tenantId, String platform, String externalShopId
+    );
+
     boolean existsByTenantIdAndPlatformIgnoreCaseAndStoreNameIgnoreCaseAndIdNot(
             Long tenantId, String platform, String storeName, String id
     );

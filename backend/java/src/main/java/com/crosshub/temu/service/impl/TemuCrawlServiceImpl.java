@@ -5,6 +5,7 @@ import com.crosshub.platform.service.PlatformAccountService;
 import com.crosshub.temu.service.TemuCrawlService;
 import com.crosshub.tenant.service.DataScopeService;
 import com.crosshub.temu.service.TemuCrawlAuthService;
+import com.crosshub.temu.service.TemuSessionService;
 import com.crosshub.temu.service.CrawlConflictException;
 
 import com.crosshub.config.CrawlerProperties;
@@ -57,6 +58,7 @@ public class TemuCrawlServiceImpl implements TemuCrawlService {
     private final ObjectMapper objectMapper;
     private final Executor crawlExecutor;
     private final PlatformAccountService platformAccountService;
+    private final TemuSessionService temuSessionService;
 
     public TemuCrawlServiceImpl(
             TemuCrawlJobRepository jobRepository,
@@ -66,7 +68,8 @@ public class TemuCrawlServiceImpl implements TemuCrawlService {
             CrawlerProperties crawlerProperties,
             ObjectMapper objectMapper,
             @Qualifier("crawlExecutor") Executor crawlExecutor,
-            PlatformAccountService platformAccountService
+            PlatformAccountService platformAccountService,
+            TemuSessionService temuSessionService
     ) {
         this.jobRepository = jobRepository;
         this.crawlAuthService = crawlAuthService;
@@ -76,6 +79,7 @@ public class TemuCrawlServiceImpl implements TemuCrawlService {
         this.objectMapper = objectMapper;
         this.crawlExecutor = crawlExecutor;
         this.platformAccountService = platformAccountService;
+        this.temuSessionService = temuSessionService;
     }
 
     @Transactional
@@ -89,6 +93,8 @@ public class TemuCrawlServiceImpl implements TemuCrawlService {
         if (seed && !crawlerProperties.isAllowSeed()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, AppErrorCode.CRAWL_SEED_DISABLED.getUserMessage());
         }
+
+        assertProfileAvailable(tenantId);
 
         Optional<TemuCrawlJob> active = jobRepository.findFirstByTenantIdAndStatusInOrderByCreatedAtDesc(
                 tenantId, ACTIVE_STATUSES
@@ -222,7 +228,8 @@ public class TemuCrawlServiceImpl implements TemuCrawlService {
 
             job.setStatus("success");
             job.setFinishedAt(now());
-            job.setErrorMessage(null);
+            job.setErrorCode("");
+            job.setErrorMessage("");
             jobRepository.save(job);
 
             try {
@@ -237,6 +244,34 @@ public class TemuCrawlServiceImpl implements TemuCrawlService {
             log.error("Temu crawl job {} failed", jobId, ex);
             String raw = ex.getMessage() == null ? "爬取进程异常" : ex.getMessage();
             failJob(job, AppErrorCode.classifyCrawlRaw(raw), raw);
+        }
+    }
+
+    private void assertProfileAvailable(Long tenantId) {
+        try {
+            java.util.Map<String, Object> session = temuSessionService.getSessionStatus();
+            if (!Boolean.TRUE.equals(session.get("profile_busy"))) {
+                return;
+            }
+            Optional<TemuCrawlJob> active = jobRepository.findFirstByTenantIdAndStatusInOrderByCreatedAtDesc(
+                    tenantId, ACTIVE_STATUSES
+            );
+            if (active.isPresent()) {
+                TemuCrawlJob existing = reconcileStaleJob(active.get());
+                if (ACTIVE_STATUS_SET.contains(existing.getStatus())) {
+                    throw new CrawlConflictException(existing);
+                }
+            }
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Temu 登录窗口仍占用浏览器，请关闭 CrossHub 弹出的登录浏览器后重试"
+            );
+        } catch (CrawlConflictException ex) {
+            throw ex;
+        } catch (ResponseStatusException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            log.debug("Temu session pre-check skipped: {}", ex.getMessage());
         }
     }
 
@@ -291,12 +326,29 @@ public class TemuCrawlServiceImpl implements TemuCrawlService {
     }
 
     private void failJob(TemuCrawlJob job, AppErrorCode code, String internalDetail) {
+        if (hasPersistedPayload(job)) {
+            partialJob(job, code, internalDetail);
+            return;
+        }
         log.warn("Temu crawl job {} failed [{}]: {}", job.getId(), code.getCode(), trimMessage(internalDetail));
         job.setStatus("failed");
         job.setFinishedAt(now());
         job.setErrorCode(code.getCode());
         job.setErrorMessage(code.getUserMessage());
         jobRepository.save(job);
+    }
+
+    private void partialJob(TemuCrawlJob job, AppErrorCode code, String internalDetail) {
+        log.warn("Temu crawl job {} partial [{}]: {}", job.getId(), code.getCode(), trimMessage(internalDetail));
+        job.setStatus("partial");
+        job.setFinishedAt(now());
+        job.setErrorCode(code.getCode());
+        job.setErrorMessage("爬取已完成，但任务收尾异常，页面数据可能已更新");
+        jobRepository.save(job);
+    }
+
+    private boolean hasPersistedPayload(TemuCrawlJob job) {
+        return job.getRowsCount() != null && job.getRowsCount() > 0;
     }
 
     private String combineOutput(String stderr, String stdout) {

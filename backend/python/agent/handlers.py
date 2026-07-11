@@ -6,6 +6,7 @@ from typing import Any
 
 from agent.java_client import AgentApiClient
 from app.amazon.report_crawler import AmazonLoginRequiredError, crawl_amazon
+from app.amazon.write_actions import execute_amazon_write
 from app.ziniao.client import ZiniaoClient, ZiniaoConfig
 
 CRAWL_TIMEOUT_SECONDS = 900
@@ -38,9 +39,10 @@ def handle_amazon_sync(client: AgentApiClient, task: dict[str, Any]) -> None:
 
     payload = task.get("payload") or {}
     scope = str(payload.get("scope") or "account_health")
-    browser_id = str(payload.get("browser_id") or "")
+    browser_id = str(payload.get("browser_id") or payload.get("external_shop_id") or "")
     browser_oauth = str(payload.get("browser_oauth") or "")
     store_name = str(payload.get("store_name") or "")
+    merchant_id = str(payload.get("merchant_id") or "")
 
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -50,6 +52,7 @@ def handle_amazon_sync(client: AgentApiClient, task: dict[str, Any]) -> None:
                 browser_id=browser_id,
                 browser_oauth=browser_oauth,
                 store_name=store_name,
+                merchant_id=merchant_id,
             )
             result = future.result(timeout=CRAWL_TIMEOUT_SECONDS)
         client.complete_task_with_retry(task_id, status="success", result=result)
@@ -80,6 +83,54 @@ def handle_amazon_sync(client: AgentApiClient, task: dict[str, Any]) -> None:
         )
 
 
+def handle_amazon_write(client: AgentApiClient, task: dict[str, Any]) -> None:
+    task_id = str(task.get("task_id") or task.get("id") or "")
+    if not task_id:
+        return
+
+    payload = task.get("payload") or {}
+    action = str(payload.get("action") or "")
+    browser_id = str(payload.get("browser_id") or payload.get("external_shop_id") or "")
+    browser_oauth = str(payload.get("browser_oauth") or "")
+    store_name = str(payload.get("store_name") or "")
+    item_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else payload
+    request = payload.get("request") if isinstance(payload.get("request"), dict) else {}
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                execute_amazon_write,
+                action=action,
+                browser_id=browser_id,
+                browser_oauth=browser_oauth,
+                store_name=store_name,
+                item_payload=item_payload,
+                request=request,
+            )
+            result = future.result(timeout=300)
+        client.complete_task_with_retry(task_id, status="success", result=result)
+    except AmazonLoginRequiredError as exc:
+        client.complete_task_with_retry(
+            task_id,
+            status="failed",
+            error_code="AMAZON_LOGIN_REQUIRED",
+            error_message=str(exc),
+        )
+    except Exception as exc:
+        message = str(exc)
+        error_code = "AMAZON_WRITE_FAILED"
+        if "AMAZON_WRITE_DOM_FAILED" in message:
+            error_code = "AMAZON_WRITE_DOM_FAILED"
+        elif "未登录" in message or "login" in message.lower():
+            error_code = "AMAZON_LOGIN_REQUIRED"
+        client.complete_task_with_retry(
+            task_id,
+            status="failed",
+            error_code=error_code,
+            error_message=message,
+        )
+
+
 def dispatch_task(client: AgentApiClient, task: dict[str, Any]) -> None:
     task_type = str(task.get("task_type") or "")
     if task_type in {"ziniao_discover", "amazon_ziniao_discover"}:
@@ -87,6 +138,9 @@ def dispatch_task(client: AgentApiClient, task: dict[str, Any]) -> None:
         return
     if task_type == "amazon_sync":
         handle_amazon_sync(client, task)
+        return
+    if task_type == "amazon_write":
+        handle_amazon_write(client, task)
         return
     task_id = str(task.get("task_id") or "")
     if task_id:

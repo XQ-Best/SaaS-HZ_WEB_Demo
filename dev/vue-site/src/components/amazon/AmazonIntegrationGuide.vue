@@ -68,8 +68,7 @@ defineExpose({ reload: loadStatus, allReady })
     <template #default>
       <ol class="guide-steps">
         <li>打开 <el-link type="primary" @click="goAgentSettings">设置 → Amazon 同步助手</el-link></li>
-        <li>下载并运行「紫鸟启动助手」</li>
-        <li>下载并运行「Amazon 同步助手」，<strong>保持窗口不要关闭</strong></li>
+        <li>下载并运行「Amazon 同步助手」（会自动启动紫鸟），<strong>保持窗口不要关闭</strong></li>
         <li>回到 <el-link type="primary" @click="goAccountBinding">账户绑定</el-link> 从紫鸟导入店铺</li>
       </ol>
       <p class="guide-note">全程在网页下载启动文件即可，无需修改代码或配置文件。</p>

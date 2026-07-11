@@ -72,7 +72,9 @@ public class AliExpressCrawlServiceImpl implements AliExpressCrawlService {
     @Override
     @Transactional
     public AliExpressCrawlJob triggerCrawl(AliExpressCrawlRequest request) {
-        return createJob(request == null ? null : request.reportTime(), "all");
+        String scope = request == null ? "all" : request.resolvedScope();
+        String reportTime = request == null ? null : request.reportTime();
+        return createJob(reportTime, scope);
     }
 
     @Override
@@ -230,8 +232,8 @@ public class AliExpressCrawlServiceImpl implements AliExpressCrawlService {
 
             job.setStatus("success");
             job.setFinishedAt(now());
-            job.setErrorCode(null);
-            job.setErrorMessage(null);
+            job.setErrorCode("");
+            job.setErrorMessage("");
             jobRepository.save(job);
         } catch (Exception ex) {
             log.error("AliExpress crawl job {} failed", jobId, ex);
@@ -291,12 +293,38 @@ public class AliExpressCrawlServiceImpl implements AliExpressCrawlService {
     }
 
     private void failJob(AliExpressCrawlJob job, AppErrorCode code, String raw) {
+        if (hasPersistedPayload(job)) {
+            partialJob(job, code, raw);
+            return;
+        }
         job.setStatus("failed");
         job.setFinishedAt(now());
         job.setErrorCode(code.getCode());
         job.setErrorMessage(code.getUserMessage());
         jobRepository.save(job);
         log.warn("AliExpress crawl job {} failed [{}]: {}", job.getId(), code.getCode(), trimMessage(raw));
+    }
+
+    private void partialJob(AliExpressCrawlJob job, AppErrorCode code, String raw) {
+        job.setStatus("partial");
+        job.setFinishedAt(now());
+        job.setErrorCode(code.getCode());
+        job.setErrorMessage("爬取已完成，但任务收尾异常，页面数据可能已更新");
+        jobRepository.save(job);
+        log.warn("AliExpress crawl job {} partial [{}]: {}", job.getId(), code.getCode(), trimMessage(raw));
+    }
+
+    private boolean hasPersistedPayload(AliExpressCrawlJob job) {
+        if (job.getRowsCount() != null && job.getRowsCount() > 0) {
+            return true;
+        }
+        if (job.getOrdersCount() != null && job.getOrdersCount() > 0) {
+            return true;
+        }
+        if (job.getViolationsCount() != null && job.getViolationsCount() > 0) {
+            return true;
+        }
+        return job.getProductsCount() != null && job.getProductsCount() > 0;
     }
 
     private JsonNode parseJsonLine(String stdout) {

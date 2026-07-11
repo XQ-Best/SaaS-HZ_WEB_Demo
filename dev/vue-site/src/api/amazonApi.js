@@ -3,7 +3,7 @@ import { AppApiError, getAppErrorMessage, toAppApiError } from '@/utils/appError
 import { service, getAccessToken } from './request'
 import { isTemuBackendEnabled, TEMU_API_BASE_URL } from './config'
 import { isBackendLinked } from './backendSession'
-import { parseAmazonAmount } from '@/utils/amazonBoss'
+import { parseAmazonAmount, isValidAmazonProduct } from '@/utils/amazonBoss'
 
 const SYNC_POLL_MS = 2000
 const SYNC_MAX_WAIT_MS = 960000
@@ -193,7 +193,7 @@ function mapInsightsPayload(data, stores = []) {
     (items || []).filter((item) => !boundIds.size || boundIds.has(item.storeId))
 
   return {
-    products: filterByStore((data?.products || []).map(mapProduct)),
+    products: filterByStore((data?.products || []).map(mapProduct).filter(isValidAmazonProduct)),
     outboundOrders: filterByStore((data?.outbound_orders || data?.outboundOrders || []).map(mapOutbound)),
     syncedAt: data?.synced_at ?? data?.syncedAt ?? '',
   }
@@ -416,31 +416,58 @@ export async function fetchAmazonSpApiStatus() {
   return { success: true, data: unwrapData(res) }
 }
 
+const WRITE_POLL_MS = 2000
+const WRITE_MAX_WAIT_MS = 180000
+
+async function waitForAmazonWriteJob(jobId) {
+  const deadline = Date.now() + WRITE_MAX_WAIT_MS
+  while (Date.now() < deadline) {
+    const job = unwrapData(await service.get(`/api/amazon/write/${jobId}`, { skipGlobalErrorToast: true }))
+    if (job.status === 'success') {
+      return job
+    }
+    if (job.status === 'failed') {
+      throw new AppApiError(
+        getAppErrorMessage(job.error_code, job.error_message || 'Amazon 写操作失败'),
+        job.error_code || 'AMAZON_WRITE_FAILED',
+      )
+    }
+    await sleep(WRITE_POLL_MS)
+  }
+  throw new AppApiError('Amazon 写操作超时，请稍后在 Seller Central 确认', 'CRAWL_TIMEOUT')
+}
+
+async function patchAmazonWrite(path, body, mapper) {
+  const res = await service.patch(path, body)
+  const data = unwrapData(res)
+  const jobId = data.write_job_id || data.writeJobId
+  if (jobId && (data.write_status === 'pending' || data.status === 'pending_write')) {
+    await waitForAmazonWriteJob(jobId)
+  }
+  return { success: true, data: mapper(data) }
+}
+
 export async function replyAmazonMessageBackend(id, payload = {}) {
-  const res = await service.patch(`/api/amazon/daily/messages/${id}`, {
+  return patchAmazonWrite(`/api/amazon/daily/messages/${id}`, {
     template_id: payload.templateId,
     note: payload.note || '',
-  })
-  return { success: true, data: mapMessage(unwrapData(res)) }
+  }, mapMessage)
 }
 
 export async function handleAmazonReviewBackend(id, payload = {}) {
-  const res = await service.patch(`/api/amazon/daily/reviews/${id}`, {
+  return patchAmazonWrite(`/api/amazon/daily/reviews/${id}`, {
     note: payload.note || '',
-  })
-  return { success: true, data: mapReview(unwrapData(res)) }
+  }, mapReview)
 }
 
 export async function acknowledgeAmazonCaseBackend(id) {
-  const res = await service.patch(`/api/amazon/daily/cases/${id}`)
-  return { success: true, data: mapCase(unwrapData(res)) }
+  return patchAmazonWrite(`/api/amazon/daily/cases/${id}`, {}, mapCase)
 }
 
 export async function shipAmazonOutboundBackend(id, payload = {}) {
-  const res = await service.patch(`/api/amazon/outbound/${id}/ship`, {
+  return patchAmazonWrite(`/api/amazon/outbound/${id}/ship`, {
     tracking_no: payload.trackingNo || '',
-  })
-  return { success: true, data: mapOutbound(unwrapData(res)) }
+  }, mapOutbound)
 }
 
 export function canUseAmazonBackend() {

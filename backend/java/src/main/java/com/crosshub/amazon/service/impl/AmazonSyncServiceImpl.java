@@ -68,11 +68,13 @@ public class AmazonSyncServiceImpl implements AmazonSyncService {
                             tenantId, account.getId(), scope, ACTIVE
                     );
             if (active.isPresent()) {
-                AmazonSyncJob existing = active.get();
-                if (!isStale(existing)) {
+                AmazonSyncJob existing = reconcileJob(active.get());
+                if (ACTIVE.contains(existing.getStatus()) && !isStale(existing)) {
                     throw new AmazonSyncConflictException(existing);
                 }
-                markStaleJobFailed(existing);
+                if (ACTIVE.contains(existing.getStatus())) {
+                    markStaleJobFailed(existing);
+                }
             }
 
             String taskId = "agt_" + UUID.randomUUID();
@@ -96,28 +98,46 @@ public class AmazonSyncServiceImpl implements AmazonSyncService {
         return Map.of("jobs", jobs);
     }
 
+    @Override
     public AmazonSyncJob getJob(String jobId) {
         Long tenantId = dataScopeService.requireTenantId();
-        return syncJobRepository.findByIdAndTenantId(jobId, tenantId)
+        AmazonSyncJob job = syncJobRepository.findByIdAndTenantId(jobId, tenantId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, AppErrorCode.AMAZON_SYNC_JOB_NOT_FOUND.getUserMessage()));
+        return reconcileJob(job);
     }
 
+    @Override
+    @Transactional
+    public void onAgentTaskStarted(String taskId) {
+        AmazonSyncJob job = findJobByAgentTaskId(taskId);
+        if (job == null || !ACTIVE.contains(job.getStatus())) {
+            return;
+        }
+        if (!"running".equals(job.getStatus())) {
+            job.setStatus("running");
+        }
+        if (job.getStartedAt() == null || job.getStartedAt().isBlank()) {
+            job.setStartedAt(now());
+        }
+        syncJobRepository.save(job);
+    }
+
+    @Override
     @Transactional
     public void onAgentTaskCompleted(String taskId, String status, Map<String, Object> result, String errorCode, String errorMessage) {
         if (taskId == null || taskId.isBlank()) {
             return;
         }
-        AmazonSyncJob job = syncJobRepository.findAll().stream()
-                .filter(x -> taskId.equals(x.getAgentTaskId()))
-                .findFirst()
-                .orElse(null);
+        AmazonSyncJob job = findJobByAgentTaskId(taskId);
         if (job == null) {
             return;
         }
 
         if (!"running".equals(job.getStatus())) {
             job.setStatus("running");
-            job.setStartedAt(now());
+            if (job.getStartedAt() == null || job.getStartedAt().isBlank()) {
+                job.setStartedAt(now());
+            }
         }
 
         if (!"success".equalsIgnoreCase(status)) {
@@ -146,8 +166,8 @@ public class AmazonSyncServiceImpl implements AmazonSyncService {
             job.setErrorCode(AppErrorCode.AMAZON_NO_PRODUCT_ROWS.getCode());
             job.setErrorMessage(AppErrorCode.AMAZON_NO_PRODUCT_ROWS.getUserMessage());
         } else {
-            job.setErrorCode(null);
-            job.setErrorMessage(null);
+            job.setErrorCode("");
+            job.setErrorMessage("");
         }
         job.setResultSummary(writeJson(summary));
         job.setFinishedAt(now());
@@ -182,7 +202,10 @@ public class AmazonSyncServiceImpl implements AmazonSyncService {
         payload.put("platform", "amazon");
         payload.put("platform_account_id", account.getId());
         payload.put("external_shop_id", defaultText(account.getExternalShopId(), ""));
+        payload.put("browser_id", defaultText(account.getExternalShopId(), ""));
+        payload.put("browser_oauth", defaultText(account.getZiniaoBrowserOauth(), ""));
         payload.put("store_name", defaultText(account.getStoreName(), ""));
+        payload.put("merchant_id", defaultText(account.getAmazonMerchantId(), ""));
 
         jdbc.update(
                 """
@@ -202,6 +225,70 @@ public class AmazonSyncServiceImpl implements AmazonSyncService {
             case "account_health", "daily", "insights", "reports" -> s;
             default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, AppErrorCode.BAD_REQUEST.getUserMessage());
         };
+    }
+
+    private AmazonSyncJob reconcileJob(AmazonSyncJob job) {
+        if (job == null) {
+            return null;
+        }
+        syncJobStatusFromAgentTask(job);
+        if (ACTIVE.contains(job.getStatus()) && isStale(job)) {
+            markStaleJobFailed(job);
+        }
+        return job;
+    }
+
+    private void syncJobStatusFromAgentTask(AmazonSyncJob job) {
+        String agentTaskId = job.getAgentTaskId();
+        if (agentTaskId == null || agentTaskId.isBlank()) {
+            return;
+        }
+        List<Map<String, Object>> rows = jdbc.query(
+                """
+                SELECT status, started_at, error_code, error_message
+                FROM agent_task
+                WHERE id = ? AND tenant_id = ?
+                LIMIT 1
+                """,
+                (rs, rowNum) -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("status", rs.getString("status"));
+                    row.put("started_at", rs.getString("started_at"));
+                    row.put("error_code", rs.getString("error_code"));
+                    row.put("error_message", rs.getString("error_message"));
+                    return row;
+                },
+                agentTaskId,
+                job.getTenantId()
+        );
+        if (rows.isEmpty() || !ACTIVE.contains(job.getStatus())) {
+            return;
+        }
+
+        String agentStatus = String.valueOf(rows.get(0).get("status"));
+        String agentStartedAt = String.valueOf(rows.get(0).getOrDefault("started_at", ""));
+        if ("running".equals(agentStatus)) {
+            job.setStatus("running");
+            if (!agentStartedAt.isBlank()) {
+                job.setStartedAt(agentStartedAt);
+            } else if (job.getStartedAt() == null || job.getStartedAt().isBlank()) {
+                job.setStartedAt(now());
+            }
+            syncJobRepository.save(job);
+            return;
+        }
+        if ("failed".equals(agentStatus)) {
+            job.setStatus("failed");
+            job.setStartedAt(agentStartedAt.isBlank() ? defaultText(job.getStartedAt(), now()) : agentStartedAt);
+            job.setFinishedAt(now());
+            job.setErrorCode(defaultText(String.valueOf(rows.get(0).get("error_code")), AppErrorCode.AMAZON_SYNC_FAILED.getCode()));
+            job.setErrorMessage(defaultText(String.valueOf(rows.get(0).get("error_message")), AppErrorCode.AMAZON_SYNC_FAILED.getUserMessage()));
+            syncJobRepository.save(job);
+        }
+    }
+
+    private AmazonSyncJob findJobByAgentTaskId(String taskId) {
+        return syncJobRepository.findFirstByAgentTaskId(taskId).orElse(null);
     }
 
     private boolean isStale(AmazonSyncJob job) {

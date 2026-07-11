@@ -33,6 +33,9 @@ const filterOptions = computed(() => [
 
 const filtered = computed(() => {
   if (filter.value === 'all') return props.messages
+  if (filter.value === 'pending') {
+    return props.messages.filter((m) => m.status === 'pending' || m.status === 'pending_write')
+  }
   return props.messages.filter((m) => m.status === filter.value)
 })
 
@@ -136,6 +139,7 @@ defineExpose({ finishReply })
           <el-button v-if="row.status === 'pending'" type="primary" link size="small" @click="openReply(row)">
             回复
           </el-button>
+          <el-tag v-else-if="row.status === 'pending_write'" size="small" type="warning">写回中</el-tag>
           <el-text v-else size="small" type="success">已回复</el-text>
         </template>
       </el-table-column>

@@ -20,6 +20,7 @@ export const OUTBOUND_FULFILLMENT = {
 
 export const OUTBOUND_STATUS = {
   pending: { label: '待发货', type: 'danger' },
+  pending_write: { label: '写回中', type: 'warning' },
   packed: { label: '待揽收', type: 'warning' },
   shipped: { label: '已发货', type: 'success' },
   cancelled: { label: '已取消', type: 'info' },

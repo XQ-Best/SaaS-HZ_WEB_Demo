@@ -113,11 +113,22 @@ public class AmazonZiniaoServiceImpl implements AmazonZiniaoService {
         }
         List<Map<String, Object>> out = new ArrayList<>();
         for (ZiniaoBindRequest.StoreCandidate x : request.stores()) {
-            String storeName = x.storeUsername() == null || x.storeUsername().isBlank()
-                    ? ("Amazon店铺" + System.currentTimeMillis())
-                    : x.storeUsername();
+            String browserId = x.browserId() == null ? "" : x.browserId().trim();
+            if (browserId.isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "紫鸟 browserId 不能为空");
+            }
+            String storeName = firstNonBlank(x.browserName(), x.storeUsername(), "Amazon店铺" + System.currentTimeMillis());
+            String account = firstNonBlank(x.storeUsername(), browserId, storeName);
             out.add(platformAccountService.upsert(new StorePayload(
-                    null, "amazon", storeName, storeName, "", "", x.browserId()
+                    null,
+                    "amazon",
+                    storeName,
+                    account,
+                    "",
+                    "",
+                    browserId,
+                    "ziniao",
+                    x.browserOauth() == null ? "" : x.browserOauth().trim()
             )));
         }
         return out;
@@ -152,5 +163,17 @@ public class AmazonZiniaoServiceImpl implements AmazonZiniaoService {
 
     private String now() {
         return LocalDateTime.now().format(TS);
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return "";
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+        return "";
     }
 }

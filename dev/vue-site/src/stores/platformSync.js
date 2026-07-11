@@ -14,6 +14,7 @@ export const usePlatformSyncStore = defineStore('platformSync', () => {
   const hasItems = computed(() => items.value.length > 0)
   const successCount = computed(() => items.value.filter((item) => item.status === 'success').length)
   const failedCount = computed(() => items.value.filter((item) => item.status === 'failed').length)
+  const skippedCount = computed(() => items.value.filter((item) => item.status === 'skipped').length)
   const emptyCount = computed(() => items.value.filter((item) => item.status === 'empty').length)
   const syncingCount = computed(() => items.value.filter((item) => item.status === 'syncing').length)
   const summaryText = computed(() => {
@@ -23,6 +24,9 @@ export const usePlatformSyncStore = defineStore('platformSync', () => {
       return emptyCount.value > 0
         ? `${successCount.value} 成功 · ${failedCount.value} 失败 · ${emptyCount.value} 无数据`
         : `${successCount.value} 成功 · ${failedCount.value} 待处理`
+    }
+    if (skippedCount.value > 0) {
+      return `${successCount.value} 成功 · ${skippedCount.value} 已跳过`
     }
     if (emptyCount.value > 0) return `${successCount.value} 成功 · ${emptyCount.value} 无数据`
     return `${successCount.value} 个店铺已同步`
@@ -108,7 +112,9 @@ export const usePlatformSyncStore = defineStore('platformSync', () => {
         sessionStorage.setItem(SESSION_SYNC_KEY, '1')
       }
     } catch (err) {
-      lastError.value = err.message || '自动同步失败'
+      if (!/后端暂不可用|已跳过|进行中/i.test(err.message || '')) {
+        lastError.value = err.message || '自动同步失败'
+      }
     } finally {
       running.value = false
     }
@@ -141,6 +147,7 @@ export const usePlatformSyncStore = defineStore('platformSync', () => {
     hasItems,
     successCount,
     failedCount,
+    skippedCount,
     syncingCount,
     summaryText,
     updateStoreStatus,

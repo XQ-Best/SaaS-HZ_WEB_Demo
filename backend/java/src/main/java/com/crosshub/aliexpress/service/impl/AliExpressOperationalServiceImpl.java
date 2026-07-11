@@ -8,6 +8,8 @@ import com.crosshub.aliexpress.repository.AliExpressProductRepository;
 import com.crosshub.aliexpress.repository.AliExpressViolationRepository;
 import com.crosshub.aliexpress.service.AliExpressOperationalService;
 import com.crosshub.tenant.service.DataScopeService;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -23,19 +25,22 @@ public class AliExpressOperationalServiceImpl implements AliExpressOperationalSe
     private final AliExpressOrderRepository orderRepository;
     private final AliExpressViolationRepository violationRepository;
     private final DataScopeService dataScopeService;
+    private final ObjectMapper objectMapper;
 
     public AliExpressOperationalServiceImpl(
             JdbcTemplate jdbcTemplate,
             AliExpressProductRepository productRepository,
             AliExpressOrderRepository orderRepository,
             AliExpressViolationRepository violationRepository,
-            DataScopeService dataScopeService
+            DataScopeService dataScopeService,
+            ObjectMapper objectMapper
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.productRepository = productRepository;
         this.orderRepository = orderRepository;
         this.violationRepository = violationRepository;
         this.dataScopeService = dataScopeService;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -64,7 +69,7 @@ public class AliExpressOperationalServiceImpl implements AliExpressOperationalSe
             item.put("local_stock", row.getLocalStock());
             item.put("days_without_sale", row.getDaysWithoutSale());
             item.put("daily_sales", row.getDailySales());
-            item.put("sales_last7_days", row.getSalesLast7Days());
+            item.put("sales_last7_days", parseSalesLast7Days(row.getSalesLast7Days()));
             item.put("owner", row.getOwner());
             products.add(item);
         }
@@ -137,6 +142,9 @@ public class AliExpressOperationalServiceImpl implements AliExpressOperationalSe
                 syncedAt = row.getViolatedAt();
             }
         }
+        if (syncedAt.isBlank()) {
+            syncedAt = latestViolationSyncAt(tenantId);
+        }
         return Map.of("violations", violations, "syncedAt", syncedAt);
     }
 
@@ -158,6 +166,17 @@ public class AliExpressOperationalServiceImpl implements AliExpressOperationalSe
         );
     }
 
+    private String latestViolationSyncAt(Long tenantId) {
+        return latestText(
+                """
+                SELECT finished_at FROM aliexpress_crawl_job
+                WHERE tenant_id=? AND status='success' AND violations_count IS NOT NULL
+                ORDER BY finished_at DESC LIMIT 1
+                """,
+                tenantId
+        );
+    }
+
     private String latestText(String sql, Long tenantId) {
         List<String> rows = jdbcTemplate.query(sql, (rs, rn) -> rs.getString(1), tenantId);
         return rows.isEmpty() ? "" : rows.get(0);
@@ -165,6 +184,25 @@ public class AliExpressOperationalServiceImpl implements AliExpressOperationalSe
 
     private boolean isBlank(String value) {
         return value == null || value.isBlank() || "all".equalsIgnoreCase(value);
+    }
+
+    private List<Integer> parseSalesLast7Days(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return List.of();
+        }
+        try {
+            JsonNode node = objectMapper.readTree(raw);
+            if (!node.isArray()) {
+                return List.of();
+            }
+            List<Integer> values = new ArrayList<>();
+            for (JsonNode item : node) {
+                values.add(item.asInt(0));
+            }
+            return values;
+        } catch (Exception ex) {
+            return List.of();
+        }
     }
 }
 

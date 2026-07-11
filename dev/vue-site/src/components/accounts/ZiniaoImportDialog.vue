@@ -159,8 +159,8 @@ watch(
         type="info"
         :closable="false"
         show-icon
-        title="需在本机启动紫鸟与 Amazon 同步助手"
-        description="请到「设置 → Amazon 同步助手」下载两个启动文件，双击运行后保持同步助手窗口打开。"
+        title="需在本机启动 Amazon 同步助手"
+        description="请到「设置 → Amazon 同步助手」下载启动文件，双击运行后会自动启动紫鸟与同步助手，请保持窗口打开。"
       />
 
       <div class="status-row">

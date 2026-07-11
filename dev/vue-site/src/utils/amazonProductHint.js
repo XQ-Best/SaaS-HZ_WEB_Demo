@@ -1,8 +1,23 @@
 import { getAppErrorMessage } from '@/utils/appErrorCode'
 
-export function resolveAmazonProductEmptyHint({ errorCode = '', errorMessage = '', syncedAt = '' } = {}) {
+export function resolveAmazonProductEmptyHint({
+  errorCode = '',
+  errorMessage = '',
+  syncedAt = '',
+  rawProductCount = 0,
+} = {}) {
   const code = String(errorCode || '').trim()
   const message = String(errorMessage || '').trim()
+  const rawCount = Number(rawProductCount) || 0
+
+  if (code === 'AMAZON_NO_VALID_PRODUCT_ROWS' || (syncedAt && rawCount > 0)) {
+    return {
+      title: '已同步产品快照，但 TOP20 无有效 ASIN',
+      description:
+        `库内已有 ${rawCount} 条快照，但未解析到有效 ASIN/商品名（部分行可能是价格文本）。请点击「Business Report 刷新」重新同步报表与广告数据。`,
+      type: 'warning',
+    }
+  }
 
   if (code === 'AMAZON_LOGIN_REQUIRED' || /未登录|sign in/i.test(message)) {
     return {

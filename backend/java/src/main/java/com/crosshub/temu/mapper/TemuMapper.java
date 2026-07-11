@@ -106,6 +106,8 @@ public class TemuMapper {
         map.put("boundAt", row.getBoundAt());
         map.put("externalShopId", row.getExternalShopId());
         map.put("external_shop_id", row.getExternalShopId());
+        map.put("integrationMode", row.getIntegrationMode());
+        map.put("integration_mode", row.getIntegrationMode());
         return map;
     }
 

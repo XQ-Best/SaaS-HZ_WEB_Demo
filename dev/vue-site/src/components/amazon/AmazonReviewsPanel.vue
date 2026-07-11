@@ -24,6 +24,9 @@ const summary = computed(() => summarizeReviews(props.reviews))
 
 const filtered = computed(() => {
   if (filter.value === 'all') return props.reviews
+  if (filter.value === 'pending') {
+    return props.reviews.filter((r) => r.status === 'pending' || r.status === 'pending_write')
+  }
   return props.reviews.filter((r) => r.status === filter.value)
 })
 
@@ -105,6 +108,7 @@ defineExpose({ finishHandle })
           <el-button v-if="row.status === 'pending'" type="primary" link size="small" @click="openHandle(row)">
             标记处理
           </el-button>
+          <el-tag v-else-if="row.status === 'pending_write'" size="small" type="warning">写回中</el-tag>
           <el-text v-else size="small" type="success">已处理</el-text>
         </template>
       </el-table-column>

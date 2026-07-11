@@ -18,7 +18,10 @@ public class AmazonAgentSyncBridge implements AgentServiceImpl.AmazonSyncBridge 
 
     @Override
     public void onAgentTaskStarted(AgentTask task) {
-        // Amazon sync job status is finalized in onAgentTaskCompleted.
+        if (task == null || !AgentService.TASK_TYPE.equals(task.getTaskType())) {
+            return;
+        }
+        amazonSyncService.onAgentTaskStarted(task.getId());
     }
 
     @Override

@@ -106,3 +106,5 @@ export async function acknowledgeCase(id) {
 export function loadAmazonOperationalData(stores) {
   return loadAmazonDailyWorkflow(stores)
 }
+
+export { canUseAmazonBackend, fetchAmazonDailyFromBackend, fetchAmazonInsightsFromBackend } from './amazonApi'

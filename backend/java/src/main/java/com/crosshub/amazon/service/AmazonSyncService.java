@@ -8,5 +8,6 @@ import java.util.Map;
 public interface AmazonSyncService {
     Map<String, Object> triggerSync(AmazonSyncRequest request);
     AmazonSyncJob getJob(String jobId);
+    void onAgentTaskStarted(String taskId);
     void onAgentTaskCompleted(String taskId, String status, Map<String, Object> result, String errorCode, String errorMessage);
 }

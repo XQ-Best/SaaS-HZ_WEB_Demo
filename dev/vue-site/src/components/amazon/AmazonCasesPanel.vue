@@ -12,9 +12,10 @@ const props = defineProps({
   storeNameMap: { type: Object, default: () => ({}) },
 })
 
-defineEmits(['acknowledge'])
+const emit = defineEmits(['acknowledge'])
 
 const filter = ref('new')
+const acknowledgingId = ref('')
 const summary = computed(() => summarizeCases(props.cases))
 
 const filtered = computed(() => {
@@ -34,6 +35,17 @@ function replyFromLabel(from) {
 function replyFromType(from) {
   return from === 'amazon' ? 'danger' : 'info'
 }
+
+function handleAcknowledge(id) {
+  acknowledgingId.value = id
+  emit('acknowledge', id)
+}
+
+function finishAcknowledge() {
+  acknowledgingId.value = ''
+}
+
+defineExpose({ finishAcknowledge })
 </script>
 
 <template>
@@ -89,14 +101,16 @@ function replyFromType(from) {
       <el-table-column label="操作" width="100" align="center" fixed="right">
         <template #default="{ row }">
           <el-button
-            v-if="row.hasNewReply && !row.read"
+            v-if="row.hasNewReply && !row.read && row.status !== 'pending_write'"
             type="primary"
             link
             size="small"
-            @click="$emit('acknowledge', row.id)"
+            :loading="acknowledgingId === row.id"
+            @click="handleAcknowledge(row.id)"
           >
             标记已读
           </el-button>
+          <el-tag v-else-if="row.status === 'pending_write'" size="small" type="warning">写回中</el-tag>
           <el-text v-else size="small" type="info">已读</el-text>
         </template>
       </el-table-column>

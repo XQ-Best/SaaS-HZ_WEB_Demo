@@ -41,7 +41,7 @@ SNAPSHOT_METRIC_RULES: list[tuple[str, str, re.Pattern[str], str]] = [
     (
         "open_orders",
         "未解决订单",
-        re.compile(r"未解决的订单[\s\S]{0,80}?(\d+)"),
+        re.compile(r"(?:未解决的订单|Open order|Orders to ship|Unshipped orders|Orders requiring)[\s\S]{0,80}?(\d+)", re.I),
         "count",
     ),
     (

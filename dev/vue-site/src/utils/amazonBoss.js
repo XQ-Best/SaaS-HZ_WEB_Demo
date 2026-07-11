@@ -1,15 +1,41 @@
 import { ACOS_THRESHOLDS, ACOS_LEVEL_META } from '@/constants/amazonBoss'
 
 const STATUS_ONLY_NAME = /^(在售|停售|缺货|active|inactive|out of stock|–|-)$/i
+const PRICE_ONLY_NAME = /^(?:US\$|USD\$?|\$|EUR€?|£|¥|CN¥|R\$)?\s*[\d,]+(?:\.\d+)?(?:\s*(?:USD|EUR|GBP|CNY|JPY))?\s*$/i
+const UI_ACTION_NAME = /^(了解更多|创建\s*A\/?B\s*试验|查看建议|编辑未来|报告缺失|learn more|create a\/?b test|view suggestion|edit future|report missing)/i
+const DATE_ONLY_NAME = /^\d{4}[/-]\d{1,2}[/-]\d{1,2}$/
+const GCID_LIKE_ASIN = /^G\d{9}$/i
+
+function isJunkProductName(name) {
+  const text = String(name || '').trim()
+  if (!text || STATUS_ONLY_NAME.test(text) || PRICE_ONLY_NAME.test(text)) return true
+  if (UI_ACTION_NAME.test(text)) return true
+  if (DATE_ONLY_NAME.test(text)) return true
+  if (text.length <= 10 && !/[A-Za-z]{4,}/.test(text) && /^[\u4e00-\u9fff/A-B\s]+$/i.test(text)) return true
+  return false
+}
+
+function looksLikeProductTitle(name) {
+  const text = String(name || '').trim()
+  if (isJunkProductName(text)) return false
+  if (text.length >= 24) return true
+  const words = text.match(/[A-Za-z\u4e00-\u9fff]{2,}/g) || []
+  return words.length >= 4
+}
 
 /** 判断是否为有效的 Amazon 产品行（必须有 ASIN 和真实商品名） */
 export function isValidAmazonProduct(product) {
   if (!product) return false
   const asin = String(product.asin || '').trim()
-  if (!/^[A-Z0-9]{10}$/i.test(asin)) return false
+  if (!/^[A-Z0-9]{10}$/i.test(asin) || GCID_LIKE_ASIN.test(asin)) return false
   const name = String(product.productName || product.product_name || '').trim()
-  if (!name || STATUS_ONLY_NAME.test(name)) return false
-  return true
+  if (isJunkProductName(name)) return false
+  if (!/[A-Za-z\u4e00-\u9fff]/.test(name)) return false
+  const revenue = parseAmazonAmount(product.revenue7d ?? product.revenue_30d ?? product.revenue30d)
+  const orders = Number(product.orders7d ?? product.orders_30d ?? product.orders30d) || 0
+  const inventory = Number(product.inventory ?? product.unitsOnHand ?? 0) || 0
+  const hasActivity = revenue > 0 || orders > 0 || inventory > 0
+  return hasActivity || looksLikeProductTitle(name)
 }
 
 /** 解析 US$1,518.28 / 10,411 等 Amazon 金额文本为数字 */
@@ -48,7 +74,13 @@ export function summarizeTopProducts(products = [], limit = 20) {
     conversionRate: Number(p.conversionRate) || 0,
     profitMargin: Number(p.profitMargin) || 0,
   }))
-  const sorted = [...normalized].sort((a, b) => b.revenue7d - a.revenue7d)
+  const hasActivity = (item) => item.revenue7d > 0 || item.orders7d > 0 || item.sessions7d > 0 || item.adSpend7d > 0
+  const active = normalized.filter(hasActivity)
+  const inactive = normalized.filter((item) => !hasActivity(item))
+  const sorted = [
+    ...[...active].sort((a, b) => b.revenue7d - a.revenue7d || b.orders7d - a.orders7d || b.sessions7d - a.sessions7d),
+    ...[...inactive].sort((a, b) => (a.productName || '').localeCompare(b.productName || '')),
+  ]
   const top = sorted.slice(0, limit).map((item, index) => ({ ...item, displayRank: index + 1 }))
   const highAcos = top.filter((p) => getAcosLevel(p.acos) === 'danger' || getAcosLevel(p.acos) === 'warning')
 

@@ -41,7 +41,7 @@ public class AliExpressController {
 
     @PostMapping("/crawl")
     public ResponseEntity<Map<String, Object>> trigger(@RequestBody(required = false) AliExpressCrawlRequest request) {
-        AliExpressCrawlRequest body = request == null ? new AliExpressCrawlRequest(null) : request;
+        AliExpressCrawlRequest body = request == null ? new AliExpressCrawlRequest(null, null) : request;
         try {
             return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResult.ok(toJobDto(crawlService.triggerCrawl(body))));
         } catch (AliExpressCrawlConflictException ex) {

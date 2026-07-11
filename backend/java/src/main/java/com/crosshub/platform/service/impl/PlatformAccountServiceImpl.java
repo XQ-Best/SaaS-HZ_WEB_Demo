@@ -1,5 +1,6 @@
 package com.crosshub.platform.service.impl;
 
+import com.crosshub.amazon.service.AmazonAccountDedupeService;
 import com.crosshub.common.DemoDataFilter;
 import com.crosshub.platform.service.PlatformAccountService;
 import com.crosshub.temu.mapper.TemuMapper;
@@ -36,17 +37,20 @@ public class PlatformAccountServiceImpl implements PlatformAccountService {
     private final AuthContext authContext;
     private final TemuMapper temuMapper;
     private final TemuShopRepository temuShopRepository;
+    private final AmazonAccountDedupeService amazonAccountDedupeService;
 
     public PlatformAccountServiceImpl(
             PlatformAccountRepository repository,
             AuthContext authContext,
             TemuMapper temuMapper,
-            TemuShopRepository temuShopRepository
+            TemuShopRepository temuShopRepository,
+            AmazonAccountDedupeService amazonAccountDedupeService
     ) {
         this.repository = repository;
         this.authContext = authContext;
         this.temuMapper = temuMapper;
         this.temuShopRepository = temuShopRepository;
+        this.amazonAccountDedupeService = amazonAccountDedupeService;
     }
 
     public List<Map<String, Object>> list(String platform) {
@@ -74,7 +78,16 @@ public class PlatformAccountServiceImpl implements PlatformAccountService {
         if (account.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "登录账号不能为空");
         }
-        if (id.isBlank() && password.isBlank()) {
+        boolean ziniaoAmazonBind = "amazon".equals(platform) && !trim(payload.externalShopId()).isBlank();
+        if (id.isBlank() && ziniaoAmazonBind) {
+            var existingAmazon = repository.findFirstByTenantIdAndPlatformAndExternalShopIdOrderByBoundAtDesc(
+                    tenantId, platform, trim(payload.externalShopId())
+            );
+            if (existingAmazon.isPresent()) {
+                id = existingAmazon.get().getId();
+            }
+        }
+        if (id.isBlank() && password.isBlank() && !ziniaoAmazonBind) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "登录密码不能为空");
         }
 
@@ -109,8 +122,24 @@ public class PlatformAccountServiceImpl implements PlatformAccountService {
 
         row.setCompanyName(trim(payload.companyName()));
         row.setExternalShopId(resolveExternalShopId(tenantId, platform, storeName, account, trim(payload.externalShopId())));
+        if (ziniaoAmazonBind) {
+            row.setIntegrationMode("ziniao");
+            String oauth = trim(payload.ziniaoBrowserOauth());
+            if (!oauth.isBlank()) {
+                row.setZiniaoBrowserOauth(oauth);
+            }
+        } else if (payload.integrationMode() != null && !payload.integrationMode().isBlank()) {
+            row.setIntegrationMode(trim(payload.integrationMode()));
+            String oauth = trim(payload.ziniaoBrowserOauth());
+            if (!oauth.isBlank()) {
+                row.setZiniaoBrowserOauth(oauth);
+            }
+        }
         row.setBoundAt(BOUND_AT.format(LocalDateTime.now()));
         repository.save(row);
+        if ("amazon".equals(platform)) {
+            amazonAccountDedupeService.dedupeTenant(tenantId);
+        }
         return temuMapper.toPlatformAccountDto(row);
     }
 
@@ -127,7 +156,9 @@ public class PlatformAccountServiceImpl implements PlatformAccountService {
                         item.account(),
                         item.password(),
                         companyName != null && !companyName.isBlank() ? companyName : item.companyName(),
-                        item.externalShopId()
+                        item.externalShopId(),
+                        item.integrationMode(),
+                        item.ziniaoBrowserOauth()
                 )))
                 .toList();
     }

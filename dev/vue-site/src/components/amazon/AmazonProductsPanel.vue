@@ -80,8 +80,8 @@ watch(
 <template>
   <div class="amz-panel">
     <AmazonPanelHeader
-      title="产品 TOP20"
-      description="按近 7 日销售额排序，关注 ACOS、转化与库存；Business Report 从卖家后台报表页同步"
+      :title="`产品 TOP20${summary.total ? ` · 共 ${summary.total} SKU` : ''}`"
+      description="按近 7 日销售额排序展示 TOP20，关注 ACOS、转化与 FBA 库存；完整 SKU 数以标题为准"
       :synced-at="syncedAt"
       secondary-action-label="Business Report 刷新"
       action-label="刷新数据"
@@ -92,6 +92,10 @@ watch(
     />
 
     <div class="mini-stats">
+      <div class="mini-stat">
+        <span class="mini-stat__value">{{ summary.total || summary.top.length }}</span>
+        <span class="mini-stat__label">SKU 总数</span>
+      </div>
       <div class="mini-stat">
         <span class="mini-stat__value">{{ summary.totalRevenueText }}</span>
         <span class="mini-stat__label">TOP20 销售额</span>
@@ -204,7 +208,7 @@ watch(
 
 .mini-stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 12px;
 }
 

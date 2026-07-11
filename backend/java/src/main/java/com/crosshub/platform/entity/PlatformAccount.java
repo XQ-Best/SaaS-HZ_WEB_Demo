@@ -45,6 +45,9 @@ public class PlatformAccount {
     @Column(name = "agent_node_id", columnDefinition = "TEXT NOT NULL DEFAULT ''")
     private String agentNodeId = "";
 
+    @Column(name = "amazon_merchant_id", columnDefinition = "TEXT NOT NULL DEFAULT ''")
+    private String amazonMerchantId = "";
+
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
     public Long getTenantId() { return tenantId; }
@@ -69,4 +72,6 @@ public class PlatformAccount {
     public void setZiniaoBrowserOauth(String ziniaoBrowserOauth) { this.ziniaoBrowserOauth = ziniaoBrowserOauth == null ? "" : ziniaoBrowserOauth; }
     public String getAgentNodeId() { return agentNodeId; }
     public void setAgentNodeId(String agentNodeId) { this.agentNodeId = agentNodeId == null ? "" : agentNodeId; }
+    public String getAmazonMerchantId() { return amazonMerchantId; }
+    public void setAmazonMerchantId(String amazonMerchantId) { this.amazonMerchantId = amazonMerchantId == null ? "" : amazonMerchantId; }
 }

@@ -8,14 +8,17 @@ import com.crosshub.agent.service.AgentService;
 import com.crosshub.common.AppErrorCode;
 import com.crosshub.security.AgentContext;
 import com.crosshub.security.AuthContext;
+import com.crosshub.amazon.service.AmazonWriteService;
 import com.crosshub.tenant.service.DataScopeService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
@@ -29,6 +32,8 @@ import java.util.UUID;
 @Service
 public class AgentServiceImpl implements AgentService {
     private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final long AGENT_TASK_RUNNING_TTL_SECONDS = 16 * 60;
+    private static final long AGENT_TASK_DEFAULT_TTL_SECONDS = 10 * 60;
 
     private final IntegrationAgentRepository agentRepository;
     private final AgentTaskRepository taskRepository;
@@ -36,7 +41,14 @@ public class AgentServiceImpl implements AgentService {
     private final AgentContext agentContext;
     private final DataScopeService dataScopeService;
     private final ObjectMapper objectMapper;
+    public interface AmazonWriteBridge {
+        void onAgentTaskStarted(AgentTask task);
+        void onAgentTaskCompleted(AgentTask task, String status, Map<String, Object> result, String errorCode, String errorMessage);
+    }
+
     private final AmazonSyncBridge amazonSyncBridge;
+    private final AmazonWriteBridge amazonWriteBridge;
+    private final TransactionTemplate transactionTemplate;
 
     public AgentServiceImpl(
             IntegrationAgentRepository agentRepository,
@@ -45,7 +57,9 @@ public class AgentServiceImpl implements AgentService {
             AgentContext agentContext,
             DataScopeService dataScopeService,
             ObjectMapper objectMapper,
-            @Autowired(required = false) @Lazy AmazonSyncBridge amazonSyncBridge
+            TransactionTemplate transactionTemplate,
+            @Autowired(required = false) @Lazy AmazonSyncBridge amazonSyncBridge,
+            @Autowired(required = false) @Lazy AmazonWriteBridge amazonWriteBridge
     ) {
         this.agentRepository = agentRepository;
         this.taskRepository = taskRepository;
@@ -53,7 +67,9 @@ public class AgentServiceImpl implements AgentService {
         this.agentContext = agentContext;
         this.dataScopeService = dataScopeService;
         this.objectMapper = objectMapper;
+        this.transactionTemplate = transactionTemplate;
         this.amazonSyncBridge = amazonSyncBridge;
+        this.amazonWriteBridge = amazonWriteBridge;
     }
 
     public interface AmazonSyncBridge {
@@ -121,13 +137,37 @@ public class AgentServiceImpl implements AgentService {
     }
 
     @Override
-    @Transactional
     public Map<String, Object> heartbeat(boolean ziniaoOnline) {
         IntegrationAgent agent = requireAgent();
-        agent.setLastHeartbeatAt(now());
-        agent.setZiniaoOnline(ziniaoOnline ? 1 : 0);
-        agentRepository.save(agent);
-        return Map.of("node_id", agent.getId(), "status", "ok");
+        String heartbeatAt = now();
+        int ziniaoFlag = ziniaoOnline ? 1 : 0;
+        for (int attempt = 0; attempt < 5; attempt++) {
+            try {
+                transactionTemplate.executeWithoutResult(status -> {
+                    IntegrationAgent row = agentRepository.findById(agent.getId())
+                            .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Agent 未认证"));
+                    row.setLastHeartbeatAt(heartbeatAt);
+                    row.setZiniaoOnline(ziniaoFlag);
+                    agentRepository.save(row);
+                });
+                return Map.of("node_id", agent.getId(), "status", "ok");
+            } catch (CannotAcquireLockException ex) {
+                if (attempt >= 4) {
+                    throw ex;
+                }
+                sleepQuiet(50L * (attempt + 1));
+            }
+        }
+        throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "数据库繁忙，请稍后重试");
+    }
+
+    private void sleepQuiet(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "心跳被中断");
+        }
     }
 
     @Override
@@ -135,16 +175,21 @@ public class AgentServiceImpl implements AgentService {
     public List<Map<String, Object>> pollTasks() {
         IntegrationAgent agent = requireAgent();
         Long tenantId = agent.getTenantId();
+        reconcileStaleRunningTasks(tenantId);
         List<AgentTask> pending = taskRepository.findByTenantIdAndStatusOrderByCreatedAtAsc(tenantId, "pending");
-        boolean amazonSyncRunning = taskRepository.findByTenantIdAndStatusOrderByCreatedAtAsc(tenantId, "running")
+        boolean amazonBrowserBusy = taskRepository.findByTenantIdAndStatusOrderByCreatedAtAsc(tenantId, "running")
                 .stream()
-                .anyMatch(task -> TASK_TYPE.equals(task.getTaskType()));
+                .anyMatch(task ->
+                        TASK_TYPE.equals(task.getTaskType())
+                                || AmazonWriteService.WRITE_TASK_TYPE.equals(task.getTaskType())
+                );
         List<Map<String, Object>> result = new ArrayList<>();
         for (AgentTask task : pending) {
             if (result.size() >= 5) {
                 break;
             }
-            if (TASK_TYPE.equals(task.getTaskType()) && amazonSyncRunning) {
+            if ((TASK_TYPE.equals(task.getTaskType()) || AmazonWriteService.WRITE_TASK_TYPE.equals(task.getTaskType()))
+                    && amazonBrowserBusy) {
                 continue;
             }
             task.setStatus("running");
@@ -153,8 +198,8 @@ public class AgentServiceImpl implements AgentService {
             taskRepository.save(task);
             onAgentTaskStarted(task);
             result.add(toTaskDto(task));
-            if (TASK_TYPE.equals(task.getTaskType())) {
-                amazonSyncRunning = true;
+            if (TASK_TYPE.equals(task.getTaskType()) || AmazonWriteService.WRITE_TASK_TYPE.equals(task.getTaskType())) {
+                amazonBrowserBusy = true;
             }
         }
         return result;
@@ -186,6 +231,9 @@ public class AgentServiceImpl implements AgentService {
         if (amazonSyncBridge != null) {
             amazonSyncBridge.onAgentTaskCompleted(task, normalized, result, task.getErrorCode(), task.getErrorMessage());
         }
+        if (amazonWriteBridge != null) {
+            amazonWriteBridge.onAgentTaskCompleted(task, normalized, result, task.getErrorCode(), task.getErrorMessage());
+        }
         return Map.of("task_id", task.getId(), "status", task.getStatus());
     }
 
@@ -193,6 +241,9 @@ public class AgentServiceImpl implements AgentService {
     public void onAgentTaskStarted(AgentTask task) {
         if (amazonSyncBridge != null) {
             amazonSyncBridge.onAgentTaskStarted(task);
+        }
+        if (amazonWriteBridge != null) {
+            amazonWriteBridge.onAgentTaskStarted(task);
         }
     }
 
@@ -222,5 +273,53 @@ public class AgentServiceImpl implements AgentService {
             row.put("payload", Map.of());
         }
         return row;
+    }
+
+    private void reconcileStaleRunningTasks(Long tenantId) {
+        List<AgentTask> running = taskRepository.findByTenantIdAndStatusOrderByCreatedAtAsc(tenantId, "running");
+        for (AgentTask task : running) {
+            if (!isStaleAgentTask(task)) {
+                continue;
+            }
+            task.setStatus("failed");
+            task.setFinishedAt(now());
+            task.setErrorCode(AppErrorCode.CRAWL_INTERRUPTED.getCode());
+            task.setErrorMessage(AppErrorCode.CRAWL_INTERRUPTED.getUserMessage());
+            taskRepository.save(task);
+            if (amazonSyncBridge != null) {
+                amazonSyncBridge.onAgentTaskCompleted(
+                        task,
+                        "failed",
+                        Map.of(),
+                        task.getErrorCode(),
+                        task.getErrorMessage()
+                );
+            }
+        }
+    }
+
+    private boolean isStaleAgentTask(AgentTask task) {
+        LocalDateTime base = parseTime(task.getStartedAt());
+        if (base == null) {
+            base = parseTime(task.getCreatedAt());
+        }
+        if (base == null) {
+            return true;
+        }
+        long ttl = TASK_TYPE.equals(task.getTaskType())
+                ? AGENT_TASK_RUNNING_TTL_SECONDS
+                : AGENT_TASK_DEFAULT_TTL_SECONDS;
+        return base.plusSeconds(ttl).isBefore(LocalDateTime.now());
+    }
+
+    private LocalDateTime parseTime(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        try {
+            return LocalDateTime.parse(text, TS);
+        } catch (Exception ex) {
+            return null;
+        }
     }
 }

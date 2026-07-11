@@ -3,6 +3,8 @@ package com.crosshub.amazon.service.impl;
 import com.crosshub.amazon.entity.*;
 import com.crosshub.amazon.repository.*;
 import com.crosshub.amazon.service.AmazonOperationalPersistenceService;
+import com.crosshub.amazon.util.AmazonProductRowFilter;
+import com.crosshub.platform.repository.PlatformAccountRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,17 +20,20 @@ public class AmazonOperationalPersistenceServiceImpl implements AmazonOperationa
     private final AmazonProductSnapshotRepository productSnapshotRepository;
     private final AmazonAccountMetricRepository accountMetricRepository;
     private final AmazonOperationalItemRepository operationalItemRepository;
+    private final PlatformAccountRepository platformAccountRepository;
     private final ObjectMapper objectMapper;
 
     public AmazonOperationalPersistenceServiceImpl(
             AmazonProductSnapshotRepository productSnapshotRepository,
             AmazonAccountMetricRepository accountMetricRepository,
             AmazonOperationalItemRepository operationalItemRepository,
+            PlatformAccountRepository platformAccountRepository,
             ObjectMapper objectMapper
     ) {
         this.productSnapshotRepository = productSnapshotRepository;
         this.accountMetricRepository = accountMetricRepository;
         this.operationalItemRepository = operationalItemRepository;
+        this.platformAccountRepository = platformAccountRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -39,7 +44,12 @@ public class AmazonOperationalPersistenceServiceImpl implements AmazonOperationa
         String syncedAt = text(result.get("synced_at"));
         if (syncedAt.isBlank()) syncedAt = LocalDateTime.now().format(TS);
 
+        persistMerchantId(tenantId, accountId, text(result.get("merchant_id")));
+
         List<Map<String, Object>> metrics = rows(result.get("account_metrics"));
+        if (metrics.isEmpty()) {
+            metrics = rows(result.get("metrics"));
+        }
         if (!metrics.isEmpty()) {
             accountMetricRepository.deleteByTenantIdAndPlatformAccountId(tenantId, accountId);
             for (Map<String, Object> row : metrics) {
@@ -63,6 +73,9 @@ public class AmazonOperationalPersistenceServiceImpl implements AmazonOperationa
         if (!products.isEmpty()) {
             productSnapshotRepository.deleteByTenantIdAndPlatformAccountId(tenantId, accountId);
             for (Map<String, Object> row : products) {
+                if (!AmazonProductRowFilter.isValidProductRow(row)) {
+                    continue;
+                }
                 AmazonProductSnapshot p = new AmazonProductSnapshot();
                 p.setId(textOr(row.get("id"), "prd_" + UUID.randomUUID()));
                 p.setTenantId(tenantId);
@@ -76,6 +89,9 @@ public class AmazonOperationalPersistenceServiceImpl implements AmazonOperationa
                 p.setInventory(intVal(row.get("inventory")));
                 p.setAcos(doubleVal(row.get("acos")));
                 p.setAdSpend30d(text(row.get("ad_spend_30d")));
+                p.setTacos(doubleVal(row.get("tacos")));
+                p.setConversionRate(doubleVal(row.get("conversion_rate")));
+                p.setPeriodDays(intVal(row.get("period_days")) == 0 ? 30 : intVal(row.get("period_days")));
                 p.setRankNo(intVal(row.get("rank_no")));
                 p.setCurrency(textOr(row.get("currency"), "USD"));
                 p.setSyncedAt(textOr(row.get("synced_at"), syncedAt));
@@ -90,6 +106,18 @@ public class AmazonOperationalPersistenceServiceImpl implements AmazonOperationa
         persistItems(tenantId, accountId, syncedAt, "shipment", rows(result.get("shipments")));
         persistItems(tenantId, accountId, syncedAt, "case", rows(result.get("cases")));
         persistItems(tenantId, accountId, syncedAt, "outbound_order", rows(result.get("outbound_orders")));
+    }
+
+    private void persistMerchantId(Long tenantId, String accountId, String merchantId) {
+        if (merchantId == null || merchantId.isBlank()) {
+            return;
+        }
+        platformAccountRepository.findByIdAndTenantId(accountId, tenantId).ifPresent(account -> {
+            if (account.getAmazonMerchantId() == null || account.getAmazonMerchantId().isBlank()) {
+                account.setAmazonMerchantId(merchantId);
+                platformAccountRepository.save(account);
+            }
+        });
     }
 
     private void persistItems(Long tenantId, String accountId, String syncedAt, String type, List<Map<String, Object>> rows) {

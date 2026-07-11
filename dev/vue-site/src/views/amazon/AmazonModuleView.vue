@@ -21,7 +21,7 @@ import { fetchAmazonStores } from '@/api/platformAccounts'
 import { scopeStores } from '@/utils/scope'
 import { useStoreAssignees } from '@/composables/useStoreAssignees'
 import { buildAmazonDailyChecklist } from '@/utils/amazon'
-import { summarizeTopProducts, summarizeOutboundOrders } from '@/utils/amazonBoss'
+import { summarizeTopProducts, summarizeOutboundOrders, isValidAmazonProduct } from '@/utils/amazonBoss'
 import { resolveAmazonProductEmptyHint } from '@/utils/amazonProductHint'
 import { isPlatformOperationalDemoOnly, platformOperationalHint } from '@/utils/platformOperationalMode'
 import PageHeader from '@/components/common/PageHeader.vue'
@@ -63,6 +63,7 @@ const messagesPanel = ref(null)
 const reviewsPanel = ref(null)
 const productsPanel = ref(null)
 const outboundPanel = ref(null)
+const casesPanel = ref(null)
 const productsFilter = ref('all')
 const outboundFilter = ref('pending')
 
@@ -107,15 +108,31 @@ const filteredOutbound = computed(() => filterByStore(outboundOrders.value))
 const bossProductSummary = computed(() => summarizeTopProducts(filteredProducts.value, 20))
 const outboundSummary = computed(() => summarizeOutboundOrders(filteredOutbound.value))
 
-const filtered = computed(() => ({
-  buyerMessages: filterByStore(workflow.value.buyerMessages),
-  accountMetrics: filterByStore(workflow.value.accountMetrics),
-  reviews: filterByStore(workflow.value.reviews),
-  coupons: filterByStore(workflow.value.coupons),
-  sellerNews: filterByStore(workflow.value.sellerNews),
-  shipments: filterByStore(workflow.value.shipments),
-  cases: filterByStore(workflow.value.cases),
-}))
+const filtered = computed(() => {
+  let cases = filterByStore(workflow.value.cases)
+  if (!cases.length) {
+    cases = filterByStore(workflow.value.sellerNews)
+      .filter((item) => /业绩通知|performance notification/i.test(String(item.title || '')))
+      .map((item) => ({
+        id: item.id,
+        storeId: item.storeId,
+        caseId: item.id,
+        title: item.title,
+        status: item.status === 'read' ? 'read' : 'pending',
+        openedAt: item.publishedAt || '',
+        note: item.summary || item.title || '',
+      }))
+  }
+  return {
+    buyerMessages: filterByStore(workflow.value.buyerMessages),
+    accountMetrics: filterByStore(workflow.value.accountMetrics),
+    reviews: filterByStore(workflow.value.reviews),
+    coupons: filterByStore(workflow.value.coupons),
+    sellerNews: filterByStore(workflow.value.sellerNews),
+    shipments: filterByStore(workflow.value.shipments),
+    cases,
+  }
+})
 
 const checklist = computed(() => buildAmazonDailyChecklist(filtered.value))
 
@@ -146,6 +163,7 @@ function applyWorkflowData(data) {
     cases: data.cases || [],
   }
   syncedAt.value = data.syncedAt || ''
+  markAmazonSidebarSync()
 }
 
 function applyBossData(data) {
@@ -153,7 +171,17 @@ function applyBossData(data) {
   outboundOrders.value = data.outboundOrders || []
   bossSyncedAt.value = data.syncedAt || ''
   if (bossProducts.value.length) {
-    productSyncIssue.value = null
+    const validCount = bossProducts.value.filter(isValidAmazonProduct).length
+    if (validCount > 0) {
+      productSyncIssue.value = null
+      markAmazonSidebarSync()
+      return
+    }
+    productSyncIssue.value = resolveAmazonProductEmptyHint({
+      errorCode: 'AMAZON_NO_VALID_PRODUCT_ROWS',
+      syncedAt: bossSyncedAt.value,
+      rawProductCount: bossProducts.value.length,
+    })
   }
 }
 
@@ -186,6 +214,39 @@ async function ensurePlatformSyncSeeded() {
     if (targets.length) syncStore.updateItems(targets)
   } catch {
     // best effort
+  }
+}
+
+function markAmazonSidebarSync({ status = 'success', message = '' } = {}) {
+  if (operationalDemoOnly.value || !amazonStores.value.length) return
+  const productCount = bossProducts.value.filter(isValidAmazonProduct).length
+  const workflowCount =
+    (workflow.value.accountMetrics?.length || 0)
+    + (workflow.value.reviews?.length || 0)
+    + (workflow.value.coupons?.length || 0)
+    + (workflow.value.shipments?.length || 0)
+    + (workflow.value.cases?.length || 0)
+  const rowCount = productCount + outboundOrders.value.length + workflowCount
+  const resolvedStatus = rowCount > 0 ? status : 'empty'
+  const resolvedMessage =
+    message
+    || (productCount > 0
+      ? `已同步 ${productCount} SKU · ${outboundOrders.value.length} 订单`
+      : workflowCount > 0
+        ? `已同步 ${workflowCount} 条运营待办`
+        : '暂无 Amazon 同步数据')
+
+  for (const store of amazonStores.value) {
+    syncStore.updateStoreStatus({
+      platform: 'amazon',
+      storeId: store.id,
+      storeName: store.storeName,
+      externalShopId: store.externalShopId || '',
+      status: resolvedStatus,
+      message: resolvedMessage,
+      rowCount,
+      syncedAt: bossSyncedAt.value || syncedAt.value,
+    })
   }
 }
 
@@ -304,6 +365,12 @@ async function loadModule() {
         productSyncIssue.value = resolveAmazonProductEmptyHint({
           syncedAt: bossSyncedAt.value,
         })
+      } else if (!bossProducts.value.filter(isValidAmazonProduct).length) {
+        productSyncIssue.value = resolveAmazonProductEmptyHint({
+          errorCode: 'AMAZON_NO_VALID_PRODUCT_ROWS',
+          syncedAt: bossSyncedAt.value,
+          rawProductCount: bossProducts.value.length,
+        })
       }
     } else if (!amazonStores.value.length) {
       applyWorkflowData(emptyWorkflow())
@@ -382,6 +449,8 @@ async function onAcknowledgeCase(id) {
     ElMessage.success('已标记 Case 已读')
   } catch (err) {
     ElMessage.error(err.message || '操作失败')
+  } finally {
+    casesPanel.value?.finishAcknowledge?.()
   }
 }
 
@@ -631,6 +700,7 @@ onActivated(loadModule)
           </template>
           <div class="tab-panel">
             <AmazonCasesPanel
+              ref="casesPanel"
               :cases="filtered.cases"
               :synced-at="syncedAt"
               :loading="loading"

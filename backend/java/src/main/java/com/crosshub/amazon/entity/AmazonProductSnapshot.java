@@ -44,6 +44,15 @@ public class AmazonProductSnapshot {
     @Column(name = "ad_spend_30d", nullable = false)
     private String adSpend30d = "";
 
+    @Column(nullable = false)
+    private Double tacos = 0.0;
+
+    @Column(name = "conversion_rate", nullable = false)
+    private Double conversionRate = 0.0;
+
+    @Column(name = "period_days", nullable = false)
+    private Integer periodDays = 30;
+
     @Column(name = "rank_no", nullable = false)
     private Integer rankNo = 0;
 
@@ -77,6 +86,12 @@ public class AmazonProductSnapshot {
     public void setAcos(Double acos) { this.acos = acos; }
     public String getAdSpend30d() { return adSpend30d; }
     public void setAdSpend30d(String adSpend30d) { this.adSpend30d = adSpend30d; }
+    public Double getTacos() { return tacos; }
+    public void setTacos(Double tacos) { this.tacos = tacos == null ? 0.0 : tacos; }
+    public Double getConversionRate() { return conversionRate; }
+    public void setConversionRate(Double conversionRate) { this.conversionRate = conversionRate == null ? 0.0 : conversionRate; }
+    public Integer getPeriodDays() { return periodDays; }
+    public void setPeriodDays(Integer periodDays) { this.periodDays = periodDays == null ? 30 : periodDays; }
     public Integer getRankNo() { return rankNo; }
     public void setRankNo(Integer rankNo) { this.rankNo = rankNo; }
     public String getCurrency() { return currency; }

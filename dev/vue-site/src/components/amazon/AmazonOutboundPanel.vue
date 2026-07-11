@@ -19,6 +19,9 @@ const emit = defineEmits(['refresh', 'ship'])
 
 const filter = ref(props.initialFilter)
 const shippingId = ref('')
+const dialogVisible = ref(false)
+const activeRow = ref(null)
+const trackingNo = ref('')
 
 const summary = computed(() => summarizeOutboundOrders(props.orders))
 
@@ -38,7 +41,7 @@ const filterOptions = computed(() => [
 const filteredOrders = computed(() => {
   if (filter.value === 'all') return props.orders
   if (filter.value === 'pending') {
-    return props.orders.filter((o) => o.status === 'pending')
+    return props.orders.filter((o) => o.status === 'pending' || o.status === 'pending_write')
   }
   if (filter.value === 'packed') {
     return props.orders.filter((o) => o.status === 'packed')
@@ -55,12 +58,24 @@ function statusMeta(row) {
 }
 
 function handleShip(row) {
-  shippingId.value = row.id
-  emit('ship', { id: row.id, trackingNo: '' })
+  activeRow.value = row
+  trackingNo.value = row.trackingNo || ''
+  dialogVisible.value = true
+}
+
+function submitShip() {
+  if (!trackingNo.value.trim()) {
+    ElMessage.warning('请输入运单号')
+    return
+  }
+  shippingId.value = activeRow.value.id
+  emit('ship', { id: activeRow.value.id, trackingNo: trackingNo.value.trim() })
 }
 
 function finishShip() {
   shippingId.value = ''
+  dialogVisible.value = false
+  activeRow.value = null
 }
 
 watch(
@@ -144,10 +159,24 @@ defineExpose({ finishShip })
           >
             标记发货
           </el-button>
+          <el-tag v-else-if="row.status === 'pending_write'" size="small" type="warning">写回中</el-tag>
           <span v-else-if="row.trackingNo" class="tracking">{{ row.trackingNo }}</span>
         </template>
       </el-table-column>
     </el-table>
+
+    <el-dialog v-model="dialogVisible" title="标记发货" width="440px" destroy-on-close>
+      <el-form v-if="activeRow" label-width="80px">
+        <el-form-item label="订单号">{{ activeRow.orderNo }}</el-form-item>
+        <el-form-item label="运单号" required>
+          <el-input v-model="trackingNo" placeholder="填写物流单号，将写回 Seller Central" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="shippingId === activeRow?.id" @click="submitShip">确认发货</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 

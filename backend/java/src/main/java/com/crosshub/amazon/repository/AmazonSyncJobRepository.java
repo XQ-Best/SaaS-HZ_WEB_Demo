@@ -10,10 +10,8 @@ import java.util.Optional;
 public interface AmazonSyncJobRepository extends JpaRepository<AmazonSyncJob, String> {
     List<AmazonSyncJob> findByTenantIdAndStatusInOrderByCreatedAtDesc(Long tenantId, Collection<String> statuses);
     Optional<AmazonSyncJob> findByIdAndTenantId(String id, Long tenantId);
+    Optional<AmazonSyncJob> findFirstByAgentTaskId(String agentTaskId);
     Optional<AmazonSyncJob> findFirstByTenantIdAndPlatformAccountIdAndScopeAndStatusInOrderByCreatedAtDesc(
-            Long tenantId,
-            String platformAccountId,
-            String scope,
-            Collection<String> statuses
+            Long tenantId, String platformAccountId, String scope, Collection<String> statuses
     );
 }

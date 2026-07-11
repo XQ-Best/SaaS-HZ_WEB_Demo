@@ -92,6 +92,19 @@ public class AmazonController {
         return ApiResult.ok(writeService.shipOutbound(id, request == null ? "" : request.trackingNo()));
     }
 
+    @GetMapping("/write/audit")
+    public Map<String, Object> listWriteAudit(
+            @RequestParam(value = "item_id", required = false) String itemId,
+            @RequestParam(value = "limit", defaultValue = "20") int limit
+    ) {
+        return ApiResult.ok(writeService.listWriteAudit(itemId, limit));
+    }
+
+    @GetMapping("/write/{jobId}")
+    public Map<String, Object> getWriteJob(@PathVariable String jobId) {
+        return ApiResult.ok(writeService.getWriteJob(jobId));
+    }
+
     @PostMapping("/ziniao/discover")
     public Map<String, Object> discover() {
         return ApiResult.ok(ziniaoService.triggerDiscover());

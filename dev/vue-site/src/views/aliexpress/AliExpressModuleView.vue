@@ -181,32 +181,36 @@ async function handleConfirmViolation(payload) {
 
 async function loadAliExpressModule() {
   loadingStores.value = true
+  let stores = []
   try {
     const res = await fetchAliExpressStores()
-    aliexpressStores.value = scopeStores(res.data || [], auth)
-    if (aliexpressStores.value.length) {
-      const demoRes = await loadAliExpressOperationalData(aliexpressStores.value, auth)
-      rawProducts.value = demoRes.products || demoRes.data?.products || []
-      await loadHotBroadcastFeed()
-      await Promise.all([syncTodayOrders(false), syncViolations(false)])
-    } else if (!aliexpressStores.value.length) {
-      rawProducts.value = []
-      hotBroadcasts.value = []
-      todayOrders.value = []
-      violations.value = []
-      ordersSyncedAt.value = ''
-      violationsSyncedAt.value = ''
-    }
-  } catch {
+    stores = scopeStores(res.data || [], auth)
+    aliexpressStores.value = stores
+  } catch (err) {
     aliexpressStores.value = []
+    ElMessage.error(err.message || '加载 AliExpress 店铺失败')
+    return
+  } finally {
+    loadingStores.value = false
+  }
+
+  if (!stores.length) {
     rawProducts.value = []
     hotBroadcasts.value = []
     todayOrders.value = []
     violations.value = []
     ordersSyncedAt.value = ''
     violationsSyncedAt.value = ''
-  } finally {
-    loadingStores.value = false
+    return
+  }
+
+  try {
+    const demoRes = await loadAliExpressOperationalData(stores, auth)
+    rawProducts.value = demoRes.products || demoRes.data?.products || []
+    await loadHotBroadcastFeed()
+    await Promise.all([syncTodayOrders(false), syncViolations(false)])
+  } catch (err) {
+    ElMessage.warning(err.message || '运营数据加载失败，店铺列表仍可用')
   }
 }
 

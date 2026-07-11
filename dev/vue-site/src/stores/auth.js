@@ -236,6 +236,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function login(nextRole) {
+    usePlatformSyncStore().resetSession()
     role.value = nextRole
     isLoggedIn.value = true
     persistSession()

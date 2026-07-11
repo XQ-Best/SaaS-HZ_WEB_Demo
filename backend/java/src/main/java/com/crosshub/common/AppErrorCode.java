@@ -73,6 +73,9 @@ public enum AppErrorCode {
     AMAZON_SYNC_FAILED("AMAZON_SYNC_FAILED", "Amazon 数据同步失败，请稍后重试"),
     AMAZON_LOGIN_REQUIRED("AMAZON_LOGIN_REQUIRED", "Amazon 卖家后台未登录，请在紫鸟浏览器中重新登录 Seller Central"),
     AMAZON_NO_PRODUCT_ROWS("AMAZON_NO_PRODUCT_ROWS", "同步完成，但未解析到带 ASIN 的产品行"),
+    AMAZON_WRITE_IN_PROGRESS("AMAZON_WRITE_IN_PROGRESS", "已有 Amazon 写操作任务进行中，请稍后再试"),
+    AMAZON_WRITE_JOB_NOT_FOUND("AMAZON_WRITE_JOB_NOT_FOUND", "Amazon 写操作任务不存在"),
+    AMAZON_WRITE_FAILED("AMAZON_WRITE_FAILED", "Amazon 写操作失败，请稍后重试"),
     ZINIAO_DISCOVER_FAILED("ZINIAO_DISCOVER_FAILED", "紫鸟店铺发现失败，请确认 Agent 与 WebDriver 已启动"),
 
     MONITOR_TARGET_NOT_FOUND("MONITOR_TARGET_NOT_FOUND", "竞店监控目标不存在"),

@@ -13,17 +13,18 @@ import {
   canUseAliExpressBackend,
   refreshAliExpressDataWithCrawl,
   fetchTodayAliExpressOrdersFromApi,
+  loadAliExpressViolationsFromApi,
 } from './aliexpressApi'
 import {
   canUseAmazonBackend,
   fetchAmazonDailyFromBackend,
   fetchAmazonInsightsFromBackend,
-  refreshAmazonDailyWithSync,
-  refreshAmazonReportsWithSync,
-} from './amazonApi'
+  refreshAmazonAccountHealth,
+} from './amazon'
 import { fetchAmazonIntegrationStatus } from './agentApi'
 import { probeLocalZiniao } from '@/utils/ziniaoProbe'
 import { probeLocalAgent } from '@/utils/agentProbe'
+import { autoSyncCompetitorTargetsOnPlatformRefresh } from '@/api/temuCompetitorsApi'
 import { fetchAmazonStores } from './platformAccounts'
 import { scopeStores } from '@/utils/scope'
 import {
@@ -43,6 +44,18 @@ const PLATFORM_LABELS = Object.fromEntries(
 
 function platformLabel(platform) {
   return PLATFORM_LABELS[platform] || platform
+}
+
+function isBackendUnavailable(err) {
+  const code = String(err?.errorCode || err?.code || '').trim()
+  const message = String(err?.message || '')
+  return code === 'SERVER_ERROR'
+    || /后端服务未启动|Network Error|ECONNREFUSED|socket hang up/i.test(message)
+}
+
+function isSyncConflict(err) {
+  const code = String(err?.errorCode || err?.code || '').trim()
+  return code === 'CRAWL_IN_PROGRESS' || code === 'AMAZON_SYNC_IN_PROGRESS'
 }
 
 function createSyncItem(store) {
@@ -208,11 +221,46 @@ async function syncTemuStores(auth, items, onProgress) {
     const reportTime = result.job?.report_time || ''
     const temuShops = await fetchTemuStores(auth)
     await verifyTemuShopTargets(temuTargets, temuShops, reportTime, result.job || {})
+    if (result.partial) {
+      for (const target of temuTargets) {
+        if (target.status === 'success' && result.message) {
+          target.message = result.message
+        }
+      }
+    }
+
+    if (auth.isBoss) {
+      try {
+        const competitorSync = await autoSyncCompetitorTargetsOnPlatformRefresh({ maxTargets: 3 })
+        if (competitorSync.triggered > 0) {
+          for (const target of temuTargets) {
+            if (target.status === 'success' || target.status === 'partial') {
+              target.message = `${target.message}；已排队 ${competitorSync.triggered} 个竞品快照`
+            }
+          }
+        }
+      } catch {
+        // 竞品自动同步失败不影响 Temu 销售同步结果
+      }
+    }
   } catch (err) {
-    markItems(items, (item) => item.platform === 'temu', {
-      status: 'failed',
-      message: err.message || 'Temu 自动同步失败',
-    })
+    if (isBackendUnavailable(err)) {
+      markItems(items, (item) => item.platform === 'temu', {
+        status: 'skipped',
+        message: '后端暂不可用，已跳过 Temu 自动同步',
+      })
+    } else {
+      const temuShops = await fetchTemuStores(auth).catch(() => [])
+      await verifyTemuShopTargets(temuTargets, temuShops, '', {})
+      markItems(
+        items,
+        (item) => item.platform === 'temu' && item.status === 'syncing',
+        {
+          status: 'failed',
+          message: err.message || 'Temu 自动同步失败',
+        },
+      )
+    }
   }
 
   onProgress?.([...items])
@@ -233,33 +281,79 @@ async function syncAliExpressStores(auth, items, onProgress) {
 
   markItems(items, (item) => item.platform === 'aliexpress', {
     status: 'syncing',
-    message: '无头浏览器爬取订单...',
+    message: '无头浏览器爬取订单与违规...',
   })
   onProgress?.([...items])
 
-  try {
-    await refreshAliExpressDataWithCrawl()
-    const orderRes = await fetchTodayAliExpressOrdersFromApi()
-    const orders = orderRes.orders || []
-    const syncedAt = orderRes.syncedAt || ''
-
+  function applyAliExpressTargets({ crawlRes, orders, violations, syncedAt }) {
     for (const target of targets) {
-      const count = orders.filter((order) => order.storeId === target.storeId).length
+      const orderCount = orders.filter((order) => order.storeId === target.storeId).length
+      const violationCount = violations.filter((item) => item.storeId === target.storeId).length
       target.syncedAt = syncedAt
-      if (count > 0) {
-        target.status = 'success'
-        target.rowCount = count
-        target.message = `已同步 ${count} 笔今日订单`
+      target.rowCount = orderCount + violationCount
+      const orderPart = `${orderCount} 笔今日订单`
+      const violationPart = `${violationCount} 条违规`
+      if (orderCount > 0 || violationCount > 0) {
+        target.status = crawlRes?.partial ? 'partial' : 'success'
+        target.message = crawlRes?.partial
+          ? `已同步 ${orderPart}、${violationPart}（任务部分成功）`
+          : `已同步 ${orderPart}、${violationPart}`
       } else {
-        target.status = 'empty'
-        target.message = '店铺已绑定，但今日暂无订单'
+        target.status = crawlRes?.partial ? 'partial' : 'empty'
+        target.message = crawlRes?.partial
+          ? '爬取部分成功，但今日暂无订单与违规记录'
+          : '店铺已绑定，但今日暂无订单与违规记录'
       }
     }
-  } catch (err) {
-    markItems(items, (item) => item.platform === 'aliexpress', {
-      status: 'failed',
-      message: err.message || 'AliExpress 订单同步失败',
+  }
+
+  try {
+    const crawlRes = await refreshAliExpressDataWithCrawl({ scope: 'all' })
+    const [orderRes, violationRes] = await Promise.all([
+      fetchTodayAliExpressOrdersFromApi(),
+      loadAliExpressViolationsFromApi(),
+    ])
+    applyAliExpressTargets({
+      crawlRes,
+      orders: orderRes.orders || [],
+      violations: violationRes.violations || [],
+      syncedAt: orderRes.syncedAt || violationRes.syncedAt || '',
     })
+  } catch (err) {
+    if (isBackendUnavailable(err)) {
+      markItems(items, (item) => item.platform === 'aliexpress', {
+        status: 'skipped',
+        message: '后端暂不可用，已跳过 AliExpress 自动同步',
+      })
+    } else {
+      try {
+        const [orderRes, violationRes] = await Promise.all([
+          fetchTodayAliExpressOrdersFromApi(),
+          loadAliExpressViolationsFromApi(),
+        ])
+        applyAliExpressTargets({
+          crawlRes: { partial: true },
+          orders: orderRes.orders || [],
+          violations: violationRes.violations || [],
+          syncedAt: orderRes.syncedAt || violationRes.syncedAt || '',
+        })
+        for (const target of targets) {
+          if (target.status === 'success' || target.status === 'partial') {
+            target.message = `${target.message}（爬取任务异常但数据已入库）`
+          } else if (target.status === 'syncing') {
+            target.status = isSyncConflict(err) ? 'skipped' : 'failed'
+            target.message = isSyncConflict(err)
+              ? (err.message || '已有爬取任务进行中，请稍后在页面手动同步')
+              : (err.message || 'AliExpress 同步失败')
+          }
+        }
+      } catch {
+        markItems(items, (item) => item.platform === 'aliexpress', {
+          status: isSyncConflict(err) ? 'skipped' : 'failed',
+          message: err.message || 'AliExpress 同步失败',
+        })
+      }
+    }
   }
 
   onProgress?.([...items])
@@ -306,7 +400,7 @@ async function syncAmazonStores(auth, items, onProgress) {
   if (!ziniaoReady) {
     markItems(items, (item) => item.platform === 'amazon', {
       status: 'failed',
-      message: '紫鸟 WebDriver 未就绪，请到「设置 → Amazon 同步助手」下载紫鸟启动助手',
+      message: '紫鸟 WebDriver 未就绪，请到「设置 → Amazon 同步助手」下载并运行启动文件',
     })
     onProgress?.([...items])
     return
@@ -314,47 +408,64 @@ async function syncAmazonStores(auth, items, onProgress) {
 
   markItems(items, (item) => item.platform === 'amazon', {
     status: 'syncing',
-    message: '紫鸟 Agent 同步 daily 数据...',
+    message: '紫鸟 Agent 同步账户状况...',
   })
   onProgress?.([...items])
 
   try {
     const stores = scopeStores((await fetchAmazonStores()).data || [], auth)
-    const started = await refreshAmazonDailyWithSync(stores, { scope: 'daily' })
-    let daily = started.data || (await fetchAmazonDailyFromBackend(stores)).data
-    let reportsStarted = null
-    if (started.partial || started.errorCode === 'AMAZON_NO_PRODUCT_ROWS') {
-      reportsStarted = await refreshAmazonReportsWithSync(stores)
-      const insights = reportsStarted.data || (await fetchAmazonInsightsFromBackend(stores)).data
-      if (insights?.products?.length) {
-        daily = { ...daily, syncedAt: insights.syncedAt || daily.syncedAt }
-      }
+    const started = await refreshAmazonAccountHealth(stores, { refresh: true })
+    const daily = started.data || (await fetchAmazonDailyFromBackend(stores)).data
+    let insights = { products: [] }
+    try {
+      insights = (await fetchAmazonInsightsFromBackend(stores)).data || { products: [] }
+    } catch {
+      insights = { products: [] }
     }
-    const syncedAt = daily.syncedAt || ''
+    const syncedAt = daily.syncedAt || insights.syncedAt || ''
     for (const target of targets) {
       const metrics = (daily.accountMetrics || []).filter((m) => m.storeId === target.storeId)
       const reviews = (daily.reviews || []).filter((r) => r.storeId === target.storeId)
       const coupons = (daily.coupons || []).filter((c) => c.storeId === target.storeId)
       const shipments = (daily.shipments || []).filter((s) => s.storeId === target.storeId)
-      const rowCount = metrics.length + reviews.length + coupons.length + shipments.length
+      const products = (insights.products || []).filter((p) => p.storeId === target.storeId)
+      const rowCount = metrics.length + reviews.length + coupons.length + shipments.length + products.length
       target.syncedAt = syncedAt
       target.rowCount = rowCount
       if (rowCount > 0) {
         target.status = 'success'
-        target.message = `已同步 ${metrics.length} 指标 / ${reviews.length} 差评 / ${coupons.length} 优惠券 / ${shipments.length} 货件`
-      } else if (started.partial || reportsStarted?.partial) {
+        const parts = []
+        if (products.length) parts.push(`${products.length} SKU`)
+        if (metrics.length) parts.push(`${metrics.length} 指标`)
+        if (reviews.length) parts.push(`${reviews.length} 差评`)
+        if (coupons.length) parts.push(`${coupons.length} 优惠券`)
+        if (shipments.length) parts.push(`${shipments.length} 货件`)
+        target.message = parts.length ? `已同步 ${parts.join(' / ')}` : '已同步 Amazon 数据'
+      } else if (started.partial) {
         target.status = 'empty'
-        target.message = started.warning || reportsStarted?.warning || '同步完成，但产品数据为空'
+        target.message = started.warning || '账户状况同步完成，暂无运营待办数据'
       } else {
         target.status = 'empty'
         target.message = started.message || '同步完成，暂无运营待办数据'
       }
     }
   } catch (err) {
-    markItems(items, (item) => item.platform === 'amazon', {
-      status: 'failed',
-      message: err.message || 'Amazon 自动同步失败',
-    })
+    if (isBackendUnavailable(err)) {
+      markItems(items, (item) => item.platform === 'amazon', {
+        status: 'skipped',
+        message: '后端暂不可用，已跳过 Amazon 自动同步',
+      })
+    } else if (isSyncConflict(err)) {
+      markItems(items, (item) => item.platform === 'amazon', {
+        status: 'skipped',
+        message: err.message || '已有 Amazon 同步任务进行中，请在运营页手动刷新',
+      })
+    } else {
+      markItems(items, (item) => item.platform === 'amazon', {
+        status: 'failed',
+        message: err.message || 'Amazon 自动同步失败',
+      })
+    }
   }
 
   onProgress?.([...items])

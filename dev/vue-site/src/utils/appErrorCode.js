@@ -84,6 +84,10 @@ export const APP_ERROR_MESSAGES = {
   AMAZON_SYNC_FAILED: 'Amazon 数据同步失败，请稍后重试',
   AMAZON_LOGIN_REQUIRED: 'Amazon 卖家后台未登录，请在紫鸟浏览器中重新登录 Seller Central',
   AMAZON_NO_PRODUCT_ROWS: '同步完成，但未解析到带 ASIN 的产品行',
+  AMAZON_WRITE_IN_PROGRESS: '已有 Amazon 写操作任务进行中，请稍后再试',
+  AMAZON_WRITE_JOB_NOT_FOUND: 'Amazon 写操作任务不存在',
+  AMAZON_WRITE_FAILED: 'Amazon 写操作失败，请稍后重试',
+  AMAZON_WRITE_DOM_FAILED: 'Seller Central 页面结构变化或未找到操作入口，请手动确认后重试',
 }
 
 const CRAWL_ERROR_UI = {

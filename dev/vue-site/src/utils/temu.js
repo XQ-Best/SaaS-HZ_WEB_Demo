@@ -14,11 +14,29 @@ export function calcProfit(product) {
   }
 }
 
+export function normalizeSalesLast7Days(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => Number(item) || 0)
+  }
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value)
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => Number(item) || 0)
+      }
+    } catch {
+      return []
+    }
+  }
+  return []
+}
+
 /** 7 日日均销量 */
 export function calcAvg7DayDaily(salesLast7Days) {
-  if (!salesLast7Days?.length) return 0
-  const total = salesLast7Days.reduce((s, n) => s + n, 0)
-  return round1(total / salesLast7Days.length)
+  const series = normalizeSalesLast7Days(salesLast7Days)
+  if (!series.length) return 0
+  const total = series.reduce((s, n) => s + n, 0)
+  return round1(total / series.length)
 }
 
 /** 当日 vs 7 日均值增幅 */
@@ -115,6 +133,7 @@ export function enrichTemuProduct(raw) {
 
   return {
     ...raw,
+    salesLast7Days: normalizeSalesLast7Days(raw.salesLast7Days),
     ...profit,
     ...platformIds,
     avg7DayDaily,

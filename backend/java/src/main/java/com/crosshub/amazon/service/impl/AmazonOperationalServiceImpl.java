@@ -8,6 +8,7 @@ import com.crosshub.amazon.service.AmazonOperationalService;
 import com.crosshub.platform.entity.PlatformAccount;
 import com.crosshub.platform.repository.PlatformAccountRepository;
 import com.crosshub.tenant.service.DataScopeService;
+import com.crosshub.amazon.util.AmazonProductRowFilter;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
@@ -127,8 +128,14 @@ public class AmazonOperationalServiceImpl implements AmazonOperationalService {
             row.put("inventory", p.getInventory());
             row.put("acos", p.getAcos());
             row.put("ad_spend_30d", str(p.getAdSpend30d()));
+            row.put("tacos", p.getTacos());
+            row.put("conversion_rate", p.getConversionRate());
+            row.put("period_days", p.getPeriodDays());
             row.put("rank_no", p.getRankNo());
             row.put("currency", str(p.getCurrency()));
+            if (!AmazonProductRowFilter.isValidProductRow(row)) {
+                continue;
+            }
             productRows.add(row);
             if (syncedAt.isBlank() || syncedAt.compareTo(p.getSyncedAt()) < 0) syncedAt = p.getSyncedAt();
         }

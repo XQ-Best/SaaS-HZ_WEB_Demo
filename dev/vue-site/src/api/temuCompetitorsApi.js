@@ -135,6 +135,43 @@ async function enqueueManualCrawl(target) {
   }
 }
 
+/** 顶栏 Temu 同步后：对无当日快照的 monitor 竞品目标排队抓取（不 force） */
+export async function autoSyncCompetitorTargetsOnPlatformRefresh(options = {}) {
+  const maxTargets = Number(options.maxTargets || 3)
+  const competitorsRes = await fetchBackendCompetitors()
+  const targets = (competitorsRes.data || []).filter((item) => item.status === 'active')
+  let triggered = 0
+  let skipped = 0
+
+  for (const target of targets) {
+    if (triggered >= maxTargets) break
+    try {
+      const latest = await fetchMonitorLatest(target.id)
+      if (latest.has_fresh_data) {
+        skipped += 1
+        continue
+      }
+      if (!latest.can_trigger_now) {
+        skipped += 1
+        continue
+      }
+      await triggerMonitorTarget(target.id, {
+        reason: 'platform sync auto',
+        force: false,
+      })
+      triggered += 1
+    } catch (error) {
+      if (error?.errorCode === 'MONITOR_JOB_IN_PROGRESS') {
+        skipped += 1
+        continue
+      }
+      throw error
+    }
+  }
+
+  return { triggered, skipped, total: targets.length }
+}
+
 async function buildReportForTarget(target) {
   const [latest, history] = await Promise.all([
     fetchMonitorLatest(target.id),

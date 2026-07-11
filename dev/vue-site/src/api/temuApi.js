@@ -184,8 +184,8 @@ export async function triggerTemuCrawl(options = {}) {
   if (res.status === 409 || payload?.code === 409) {
     return {
       conflict: true,
-      job,
-      message: getAppErrorMessage(payload?.error_code, payload?.msg || '已有爬取任务进行中'),
+      job: job?.job_id || job?.jobId ? job : (payload?.data ?? job),
+      message: getAppErrorMessage(payload?.error_code, payload?.msg || job?.message || '已有爬取任务进行中'),
     }
   }
   throw toAppApiError(payload, '触发爬取失败')
@@ -198,16 +198,30 @@ export async function fetchTemuCrawlJob(jobId) {
 
 export async function refreshTemuDataWithCrawl(options = {}) {
   const started = await triggerTemuCrawl(options)
-  const jobId = started.job?.job_id
+  const jobId = started.job?.job_id || started.job?.jobId || started.job?.id
   if (!jobId) {
+    if (started.conflict) {
+      throw new AppApiError(
+        started.message || '已有爬取任务进行中，请稍后再试',
+        'CRAWL_IN_PROGRESS',
+      )
+    }
     throw new AppApiError('未获取到爬取任务 ID', 'CRAWL_PROCESS_FAILED')
   }
 
   const deadline = Date.now() + CRAWL_MAX_WAIT_MS
   while (Date.now() < deadline) {
     const job = await fetchTemuCrawlJob(jobId)
-    if (job.status === 'success') {
-      return { success: true, job, conflict: started.conflict }
+    if (job.status === 'success' || job.status === 'partial') {
+      return {
+        success: true,
+        partial: job.status === 'partial',
+        job,
+        conflict: started.conflict,
+        message: job.status === 'partial'
+          ? (job.error_message || '爬取已完成，但任务收尾异常，页面数据可能已更新')
+          : (started.conflict ? '已等待进行中的爬取任务完成' : ''),
+      }
     }
     if (job.status === 'failed') {
       throw new AppApiError(
