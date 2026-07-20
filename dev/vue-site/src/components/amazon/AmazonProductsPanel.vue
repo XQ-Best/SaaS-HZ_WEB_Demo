@@ -10,6 +10,7 @@ const props = defineProps({
   products: { type: Array, default: () => [] },
   syncedAt: { type: String, default: '' },
   syncIssue: { type: Object, default: null },
+  dataQuality: { type: Object, default: null },
   loading: { type: Boolean, default: false },
   reportsLoading: { type: Boolean, default: false },
   showStoreColumn: { type: Boolean, default: false },
@@ -18,6 +19,18 @@ const props = defineProps({
 })
 
 defineEmits(['refresh', 'refreshReports'])
+
+const dataQualityAlert = computed(() => {
+  const q = props.dataQuality
+  if (!q?.warnings?.length) return null
+  const labels = {
+    BR_EMPTY: 'Business Report CSV 未采到销售额数据',
+    INV_CSV_EMPTY: '库存 CSV 未采到可售数量',
+    ADS_CSV_EMPTY: '广告 ASIN 报表 CSV 未采到花费/ACOS',
+  }
+  const text = q.warnings.map((w) => labels[w] || w).join('；')
+  return { type: 'warning', title: '部分数据源同步不完整', description: text }
+})
 
 const filter = ref(props.initialFilter)
 
@@ -55,17 +68,23 @@ const filteredProducts = computed(() => {
   return list
 })
 
-function profitType(margin) {
-  if (margin >= 15) return 'success'
-  if (margin >= 8) return 'warning'
-  return 'danger'
-}
-
 function avgAcosClass(acos) {
   const meta = acosMeta(acos)
   if (meta.level === 'danger') return 'is-danger'
   if (meta.level === 'warning') return 'is-warning'
   return ''
+}
+
+function formatOptionalPercent(value) {
+  const num = Number(value)
+  if (!Number.isFinite(num) || num <= 0) return '—'
+  return `${num}%`
+}
+
+function formatOptionalCount(value) {
+  const num = Number(value)
+  if (!Number.isFinite(num) || num <= 0) return '—'
+  return String(num)
 }
 
 watch(
@@ -102,7 +121,7 @@ watch(
       </div>
       <div class="mini-stat">
         <span class="mini-stat__value" :class="avgAcosClass(summary.avgAcos)">
-          {{ summary.avgAcos }}%
+          {{ summary.avgAcos > 0 ? `${summary.avgAcos}%` : '—' }}
         </span>
         <span class="mini-stat__label">平均 ACOS</span>
         <el-text size="small" type="info">健康线 ≤ {{ ACOS_THRESHOLDS.good }}%</el-text>
@@ -119,6 +138,16 @@ watch(
     </div>
 
     <el-alert
+      v-if="dataQualityAlert"
+      :type="dataQualityAlert.type"
+      :closable="false"
+      show-icon
+      :title="dataQualityAlert.title"
+      :description="dataQualityAlert.description"
+      style="margin-bottom: 4px"
+    />
+
+    <el-alert
       v-if="emptyHint"
       :type="emptyHint.type || 'warning'"
       :closable="false"
@@ -133,8 +162,8 @@ watch(
       type="info"
       :closable="false"
       show-icon
-      title="广告数据尚未同步"
-      description="请点击上方「Business Report 刷新」，从卖家后台报表与广告活动页同步 ACOS 与广告花费（需紫鸟与同步助手在线）。"
+      title="SKU 级广告数据尚未同步"
+      description="未从广告 ASIN 报表 CSV 采集到各 SKU 的广告花费。请点击「Business Report 刷新」重新同步（需紫鸟与同步助手在线）。"
       style="margin-bottom: 4px"
     />
 
@@ -168,33 +197,50 @@ watch(
       </el-table-column>
       <el-table-column label="广告花费" width="118" align="right" class-name="money-col">
         <template #default="{ row }">
-          <span class="money-cell">{{ formatAmazonMoney(row.adSpend7d, row.currency) }}</span>
+          <el-tooltip
+            v-if="row.adSpend7d <= 0"
+            content="未从广告活动页采集到该 SKU 花费"
+            placement="top"
+          >
+            <span class="money-cell">—</span>
+          </el-tooltip>
+          <span v-else class="money-cell">{{ formatAmazonMoney(row.adSpend7d, row.currency) }}</span>
         </template>
       </el-table-column>
       <el-table-column label="ACOS" width="88" align="center" sortable :sort-method="(a, b) => a.acos - b.acos">
         <template #default="{ row }">
-          <el-tag v-if="row.acos > 0" :type="acosMeta(row.acos).type" size="small">
+          <el-tooltip
+            v-if="row.acos <= 0"
+            content="未从广告活动页采集到该 SKU ACOS"
+            placement="top"
+          >
+            <span class="money-cell">—</span>
+          </el-tooltip>
+          <el-tag v-else :type="acosMeta(row.acos).type" size="small">
             {{ formatAmazonPercent(row.acos) }}
           </el-tag>
-          <span v-else class="money-cell">—</span>
         </template>
       </el-table-column>
       <el-table-column label="TACoS" width="72" align="center">
-        <template #default="{ row }">{{ formatAmazonPercent(row.tacos) }}</template>
+        <template #default="{ row }">
+          <el-tooltip
+            v-if="row.tacos <= 0"
+            content="需 SKU 级广告花费与销售额方可计算"
+            placement="top"
+          >
+            <span class="money-cell">—</span>
+          </el-tooltip>
+          <span v-else>{{ formatAmazonPercent(row.tacos) }}</span>
+        </template>
       </el-table-column>
       <el-table-column label="转化率" width="72" align="center">
-        <template #default="{ row }">{{ row.conversionRate }}%</template>
+        <template #default="{ row }">{{ formatOptionalPercent(row.conversionRate) }}</template>
       </el-table-column>
       <el-table-column label="会话" width="72" align="center">
-        <template #default="{ row }">{{ row.sessions7d }}</template>
+        <template #default="{ row }">{{ formatOptionalCount(row.sessions7d) }}</template>
       </el-table-column>
       <el-table-column label="FBA库存" width="80" align="center">
-        <template #default="{ row }">{{ row.unitsOnHand }}</template>
-      </el-table-column>
-      <el-table-column label="利润率" width="80" align="center">
-        <template #default="{ row }">
-          <el-text :type="profitType(row.profitMargin)" size="small">{{ row.profitMargin }}%</el-text>
-        </template>
+        <template #default="{ row }">{{ formatOptionalCount(row.unitsOnHand) }}</template>
       </el-table-column>
     </el-table>
   </div>

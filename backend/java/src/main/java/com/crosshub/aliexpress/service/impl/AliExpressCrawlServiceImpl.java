@@ -6,8 +6,10 @@ import com.crosshub.aliexpress.repository.AliExpressCrawlJobRepository;
 import com.crosshub.aliexpress.service.AliExpressCrawlConflictException;
 import com.crosshub.aliexpress.service.AliExpressCrawlService;
 import com.crosshub.common.AppErrorCode;
+import com.crosshub.common.SqliteRetry;
 import com.crosshub.config.CrawlerProperties;
 import com.crosshub.security.AuthContext;
+import com.crosshub.common.TenantCrawlCooldownService;
 import com.crosshub.tenant.service.DataScopeService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -51,7 +53,9 @@ public class AliExpressCrawlServiceImpl implements AliExpressCrawlService {
     private final AuthContext authContext;
     private final CrawlerProperties crawlerProperties;
     private final ObjectMapper objectMapper;
+    private final Executor crawlJobExecutor;
     private final Executor crawlExecutor;
+    private final TenantCrawlCooldownService crawlCooldownService;
 
     public AliExpressCrawlServiceImpl(
             AliExpressCrawlJobRepository jobRepository,
@@ -59,14 +63,18 @@ public class AliExpressCrawlServiceImpl implements AliExpressCrawlService {
             AuthContext authContext,
             CrawlerProperties crawlerProperties,
             ObjectMapper objectMapper,
-            @Qualifier("crawlExecutor") Executor crawlExecutor
+            @Qualifier("crawlJobExecutor") Executor crawlJobExecutor,
+            @Qualifier("crawlExecutor") Executor crawlExecutor,
+            TenantCrawlCooldownService crawlCooldownService
     ) {
         this.jobRepository = jobRepository;
         this.dataScopeService = dataScopeService;
         this.authContext = authContext;
         this.crawlerProperties = crawlerProperties;
         this.objectMapper = objectMapper;
+        this.crawlJobExecutor = crawlJobExecutor;
         this.crawlExecutor = crawlExecutor;
+        this.crawlCooldownService = crawlCooldownService;
     }
 
     @Override
@@ -74,13 +82,27 @@ public class AliExpressCrawlServiceImpl implements AliExpressCrawlService {
     public AliExpressCrawlJob triggerCrawl(AliExpressCrawlRequest request) {
         String scope = request == null ? "all" : request.resolvedScope();
         String reportTime = request == null ? null : request.reportTime();
-        return createJob(reportTime, scope);
+        boolean force = request != null && request.resolvedForce();
+        boolean recordCooldown = request == null || request.resolvedRecordCooldown();
+        return createJob(reportTime, scope, force, recordCooldown);
     }
 
     @Override
     @Transactional
     public AliExpressCrawlJob triggerViolationSync() {
-        return createJob(null, "violations");
+        return triggerViolationSync(false);
+    }
+
+    @Override
+    @Transactional
+    public AliExpressCrawlJob triggerViolationSync(boolean force) {
+        return triggerViolationSync(force, true);
+    }
+
+    @Override
+    @Transactional
+    public AliExpressCrawlJob triggerViolationSync(boolean force, boolean recordCooldown) {
+        return createJob(null, "violations", force, recordCooldown);
     }
 
     @Override
@@ -91,8 +113,9 @@ public class AliExpressCrawlServiceImpl implements AliExpressCrawlService {
         return reconcileStaleJob(job);
     }
 
-    private AliExpressCrawlJob createJob(String reportTime, String scope) {
+    private AliExpressCrawlJob createJob(String reportTime, String scope, boolean force, boolean recordCooldown) {
         Long tenantId = dataScopeService.requireTenantId();
+        crawlCooldownService.assertAllowed(tenantId, force);
         Long userId = authContext.userId();
         if (userId == null) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, AppErrorCode.AUTH_MISSING_USER.getUserMessage());
@@ -117,9 +140,10 @@ public class AliExpressCrawlServiceImpl implements AliExpressCrawlService {
         job.setReportTime(reportTime);
         job.setCreatedAt(now());
         jobRepository.save(job);
+        crawlCooldownService.registerJobRecordPolicy(job.getId(), recordCooldown);
 
         String jobId = job.getId();
-        scheduleAfterCommit(() -> crawlExecutor.execute(() -> executeJob(jobId)));
+        scheduleAfterCommit(() -> crawlJobExecutor.execute(() -> executeJob(jobId)));
         return job;
     }
 
@@ -137,15 +161,32 @@ public class AliExpressCrawlServiceImpl implements AliExpressCrawlService {
     }
 
     void executeJob(String jobId) {
-        AliExpressCrawlJob job = jobRepository.findById(jobId).orElse(null);
-        if (job == null) {
-            return;
+        AliExpressCrawlJob job = null;
+        try {
+            job = jobRepository.findById(jobId).orElse(null);
+            if (job == null) {
+                return;
+            }
+
+            job.setStatus("running");
+            job.setStartedAt(now());
+            persistJob(job);
+
+            runCrawlProcess(job);
+        } catch (Exception ex) {
+            log.error("AliExpress crawl job {} failed", jobId, ex);
+            if (job != null) {
+                AppErrorCode code = SqliteRetry.isLockConflict(ex)
+                        ? AppErrorCode.CRAWL_DB_BUSY
+                        : AppErrorCode.classifyCrawlRaw(ex.getMessage());
+                String raw = ex.getMessage() == null ? "爬取进程异常" : ex.getMessage();
+                failJob(job, code, raw);
+            }
         }
+    }
 
-        job.setStatus("running");
-        job.setStartedAt(now());
-        jobRepository.save(job);
-
+    private void runCrawlProcess(AliExpressCrawlJob job) throws Exception {
+        String jobId = job.getId();
         Path scriptDir = Path.of(crawlerProperties.getScriptDir()).toAbsolutePath().normalize();
         if (!Files.isDirectory(scriptDir)) {
             failJob(job, AppErrorCode.CRAWL_SCRIPT_MISSING, "Python 脚本目录不存在: " + scriptDir);
@@ -172,74 +213,69 @@ public class AliExpressCrawlServiceImpl implements AliExpressCrawlService {
         builder.environment().put("TENANT_ID", String.valueOf(job.getTenantId()));
         builder.redirectErrorStream(false);
 
-        try {
-            Process process = builder.start();
-            CompletableFuture<String> stdoutFuture = CompletableFuture.supplyAsync(
-                    () -> safeReadStream(process.getInputStream()),
-                    crawlExecutor
-            );
-            CompletableFuture<String> stderrFuture = CompletableFuture.supplyAsync(
-                    () -> safeReadStream(process.getErrorStream()),
-                    crawlExecutor
-            );
-            boolean finished = process.waitFor(crawlerProperties.getTimeoutSeconds(), TimeUnit.SECONDS);
-            if (!finished) {
-                process.destroyForcibly();
-                stdoutFuture.cancel(true);
-                stderrFuture.cancel(true);
-                failJob(job, AppErrorCode.CRAWL_TIMEOUT, "爬取超时（" + crawlerProperties.getTimeoutSeconds() + "s）");
-                return;
-            }
-            String stdout = "";
-            String stderr = "";
-            try {
-                stdout = stdoutFuture.get(3, TimeUnit.SECONDS);
-            } catch (TimeoutException ignored) {
-                stdoutFuture.cancel(true);
-            }
-            try {
-                stderr = stderrFuture.get(3, TimeUnit.SECONDS);
-            } catch (TimeoutException ignored) {
-                stderrFuture.cancel(true);
-            }
-            if (process.exitValue() != 0) {
-                String raw = combineOutput(stderr, stdout);
-                failJob(job, AppErrorCode.classifyCrawlRaw(raw), raw);
-                return;
-            }
-
-            JsonNode json = parseJsonLine(stdout);
-            if (json != null) {
-                if (json.has("report_time")) {
-                    job.setReportTime(json.get("report_time").asText(""));
-                }
-                if (json.has("shops")) {
-                    job.setShopsCount(json.get("shops").asInt(0));
-                }
-                if (json.has("rows")) {
-                    job.setRowsCount(json.get("rows").asInt(0));
-                }
-                if (json.has("orders")) {
-                    job.setOrdersCount(json.get("orders").asInt(0));
-                }
-                if (json.has("violations")) {
-                    job.setViolationsCount(json.get("violations").asInt(0));
-                }
-                if (json.has("products")) {
-                    job.setProductsCount(json.get("products").asInt(0));
-                }
-            }
-
-            job.setStatus("success");
-            job.setFinishedAt(now());
-            job.setErrorCode("");
-            job.setErrorMessage("");
-            jobRepository.save(job);
-        } catch (Exception ex) {
-            log.error("AliExpress crawl job {} failed", jobId, ex);
-            String raw = ex.getMessage() == null ? "爬取进程异常" : ex.getMessage();
-            failJob(job, AppErrorCode.classifyCrawlRaw(raw), raw);
+        Process process = builder.start();
+        CompletableFuture<String> stdoutFuture = CompletableFuture.supplyAsync(
+                () -> safeReadStream(process.getInputStream()),
+                crawlExecutor
+        );
+        CompletableFuture<String> stderrFuture = CompletableFuture.supplyAsync(
+                () -> safeReadStream(process.getErrorStream()),
+                crawlExecutor
+        );
+        boolean finished = process.waitFor(crawlerProperties.getTimeoutSeconds(), TimeUnit.SECONDS);
+        if (!finished) {
+            process.destroyForcibly();
+            stdoutFuture.cancel(true);
+            stderrFuture.cancel(true);
+            failJob(job, AppErrorCode.CRAWL_TIMEOUT, "爬取超时（" + crawlerProperties.getTimeoutSeconds() + "s）");
+            return;
         }
+        String stdout = "";
+        String stderr = "";
+        try {
+            stdout = stdoutFuture.get(3, TimeUnit.SECONDS);
+        } catch (TimeoutException ignored) {
+            stdoutFuture.cancel(true);
+        }
+        try {
+            stderr = stderrFuture.get(3, TimeUnit.SECONDS);
+        } catch (TimeoutException ignored) {
+            stderrFuture.cancel(true);
+        }
+        if (process.exitValue() != 0) {
+            String raw = combineOutput(stderr, stdout);
+            failJob(job, AppErrorCode.classifyCrawlRaw(raw), raw);
+            return;
+        }
+
+        JsonNode json = parseJsonLine(stdout);
+        if (json != null) {
+            if (json.has("report_time")) {
+                job.setReportTime(json.get("report_time").asText(""));
+            }
+            if (json.has("shops")) {
+                job.setShopsCount(json.get("shops").asInt(0));
+            }
+            if (json.has("rows")) {
+                job.setRowsCount(json.get("rows").asInt(0));
+            }
+            if (json.has("orders")) {
+                job.setOrdersCount(json.get("orders").asInt(0));
+            }
+            if (json.has("violations")) {
+                job.setViolationsCount(json.get("violations").asInt(0));
+            }
+            if (json.has("products")) {
+                job.setProductsCount(json.get("products").asInt(0));
+            }
+        }
+
+        job.setStatus("success");
+        job.setFinishedAt(now());
+        job.setErrorCode("");
+        job.setErrorMessage("");
+        persistJob(job);
+        crawlCooldownService.onJobSuccess(job.getId(), job.getTenantId());
     }
 
     private AliExpressCrawlJob reconcileStaleJob(AliExpressCrawlJob job) {
@@ -269,8 +305,20 @@ public class AliExpressCrawlServiceImpl implements AliExpressCrawlService {
         job.setFinishedAt(now());
         job.setErrorCode(AppErrorCode.CRAWL_INTERRUPTED.getCode());
         job.setErrorMessage(AppErrorCode.CRAWL_INTERRUPTED.getUserMessage());
-        jobRepository.save(job);
+        persistJobQuietly(job);
         log.warn("AliExpress crawl job {} marked stale -> failed", job.getId());
+    }
+
+    private void persistJob(AliExpressCrawlJob job) {
+        SqliteRetry.runWithRetry(() -> jobRepository.save(job));
+    }
+
+    private void persistJobQuietly(AliExpressCrawlJob job) {
+        try {
+            persistJob(job);
+        } catch (Exception ex) {
+            log.error("AliExpress crawl job {} persist failed", job.getId(), ex);
+        }
     }
 
     private LocalDateTime parseTime(String text) {
@@ -301,7 +349,7 @@ public class AliExpressCrawlServiceImpl implements AliExpressCrawlService {
         job.setFinishedAt(now());
         job.setErrorCode(code.getCode());
         job.setErrorMessage(code.getUserMessage());
-        jobRepository.save(job);
+        persistJobQuietly(job);
         log.warn("AliExpress crawl job {} failed [{}]: {}", job.getId(), code.getCode(), trimMessage(raw));
     }
 
@@ -310,7 +358,7 @@ public class AliExpressCrawlServiceImpl implements AliExpressCrawlService {
         job.setFinishedAt(now());
         job.setErrorCode(code.getCode());
         job.setErrorMessage("爬取已完成，但任务收尾异常，页面数据可能已更新");
-        jobRepository.save(job);
+        persistJobQuietly(job);
         log.warn("AliExpress crawl job {} partial [{}]: {}", job.getId(), code.getCode(), trimMessage(raw));
     }
 

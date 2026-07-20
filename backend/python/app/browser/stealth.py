@@ -8,7 +8,15 @@ STEALTH_INIT_SCRIPT = """
     } catch (_) {}
   };
   desc(navigator, 'webdriver', undefined);
-  if (!window.chrome) window.chrome = { runtime: {} };
+  if (!window.chrome) window.chrome = {};
+  if (!window.chrome.runtime) {
+    window.chrome.runtime = {
+      connect: function() {
+        return { onMessage: { addListener: function() {} }, postMessage: function() {} };
+      },
+      sendMessage: function() {},
+    };
+  }
   desc(navigator, 'languages', ['zh-CN', 'zh', 'en-US', 'en']);
   desc(navigator, 'plugins', [1, 2, 3, 4, 5]);
   const originalQuery = window.navigator.permissions.query;

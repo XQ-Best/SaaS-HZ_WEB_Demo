@@ -1,6 +1,14 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { runPlatformAutoSync } from '@/api/platformSync'
+import { runPlatformAutoSync, buildPlatformSyncTargets, hydratePlatformSyncFromBackend } from '@/api/platformSync'
+import {
+  formatCooldownRemaining,
+  getCooldownRemainingMs,
+  isPlatformCrawlInCooldown,
+  isPlatformHydrateInCooldown,
+  markPlatformHydrateCompleted,
+  PLATFORM_SYNC_COOLDOWN_MS,
+} from '@/utils/platformSyncCooldown'
 
 const SESSION_SYNC_KEY = 'crosshub_platform_sync_done'
 
@@ -10,9 +18,22 @@ export const usePlatformSyncStore = defineStore('platformSync', () => {
   const expanded = ref(true)
   const lastFinishedAt = ref('')
   const lastError = ref('')
+  const cooldownSkippedAt = ref('')
+  const boundAuth = ref(null)
+
+  const cooldownRemainingMs = computed(() => (
+    boundAuth.value ? getCooldownRemainingMs(boundAuth.value) : 0
+  ))
+  const inCooldown = computed(() => cooldownRemainingMs.value > 0)
+  const cooldownHint = computed(() => {
+    if (!inCooldown.value) return ''
+    return `同步冷却中，${formatCooldownRemaining(cooldownRemainingMs.value)}后可自动同步`
+  })
 
   const hasItems = computed(() => items.value.length > 0)
-  const successCount = computed(() => items.value.filter((item) => item.status === 'success').length)
+  const successCount = computed(() => items.value.filter(
+    (item) => item.status === 'success' || item.status === 'partial',
+  ).length)
   const failedCount = computed(() => items.value.filter((item) => item.status === 'failed').length)
   const skippedCount = computed(() => items.value.filter((item) => item.status === 'skipped').length)
   const emptyCount = computed(() => items.value.filter((item) => item.status === 'empty').length)
@@ -90,29 +111,64 @@ export const usePlatformSyncStore = defineStore('platformSync', () => {
     }
   }
 
+  function bindAuth(auth) {
+    boundAuth.value = auth
+  }
+
   function shouldAutoSync(auth) {
     if (!auth?.backendLinked || auth.isWarehouse) return false
     if (sessionStorage.getItem(SESSION_SYNC_KEY) === '1') return false
+    if (isPlatformCrawlInCooldown(auth)) return false
     return true
+  }
+
+  async function seedFromBackend(auth, { forceHydrate = false } = {}) {
+    if (!auth?.backendLinked || auth.isWarehouse) return
+    bindAuth(auth)
+    try {
+      const items = await buildPlatformSyncTargets(auth)
+      updateItems(items)
+      const skipHydrate = !forceHydrate && isPlatformHydrateInCooldown(auth) && hasItems.value
+      if (!skipHydrate) {
+        await hydratePlatformSyncFromBackend(auth, items)
+        updateItems(items)
+        markPlatformHydrateCompleted(auth)
+      }
+    } catch {
+      // best effort
+    }
   }
 
   async function runSync(auth, { force = false } = {}) {
     if (running.value) return
     if (!auth?.backendLinked || auth.isWarehouse) return
+    bindAuth(auth)
+
+    if (!force && isPlatformCrawlInCooldown(auth)) {
+      cooldownSkippedAt.value = new Date().toLocaleString('zh-CN', { hour12: false })
+      lastError.value = `同步冷却中，${formatCooldownRemaining(getCooldownRemainingMs(auth))}后可再次同步`
+      sessionStorage.setItem(SESSION_SYNC_KEY, '1')
+      return
+    }
 
     running.value = true
     lastError.value = ''
+    cooldownSkippedAt.value = ''
     try {
       const result = await runPlatformAutoSync(auth, {
         onProgress: updateItems,
+        force,
       })
       updateItems(result.items || [])
       lastFinishedAt.value = new Date().toLocaleString('zh-CN', { hour12: false })
-      if (force) {
-        sessionStorage.setItem(SESSION_SYNC_KEY, '1')
+      if (result.cooldown) {
+        lastError.value = result.message || lastError.value
+      } else if (!result.skipped) {
+        markPlatformHydrateCompleted(auth)
       }
+      sessionStorage.setItem(SESSION_SYNC_KEY, '1')
     } catch (err) {
-      if (!/后端暂不可用|已跳过|进行中/i.test(err.message || '')) {
+      if (!/后端暂不可用|已跳过|进行中|冷却/i.test(err.message || '')) {
         lastError.value = err.message || '自动同步失败'
       }
     } finally {
@@ -121,8 +177,14 @@ export const usePlatformSyncStore = defineStore('platformSync', () => {
   }
 
   async function runAutoSyncOnLogin(auth) {
-    if (!shouldAutoSync(auth)) return
-    sessionStorage.setItem(SESSION_SYNC_KEY, '1')
+    bindAuth(auth)
+    if (!shouldAutoSync(auth)) {
+      if (isPlatformCrawlInCooldown(auth)) {
+        cooldownSkippedAt.value = new Date().toLocaleString('zh-CN', { hour12: false })
+      }
+      sessionStorage.setItem(SESSION_SYNC_KEY, '1')
+      return
+    }
     await runSync(auth)
   }
 
@@ -136,6 +198,7 @@ export const usePlatformSyncStore = defineStore('platformSync', () => {
     running.value = false
     lastFinishedAt.value = ''
     lastError.value = ''
+    cooldownSkippedAt.value = ''
   }
 
   return {
@@ -144,6 +207,11 @@ export const usePlatformSyncStore = defineStore('platformSync', () => {
     expanded,
     lastFinishedAt,
     lastError,
+    cooldownSkippedAt,
+    cooldownRemainingMs,
+    inCooldown,
+    cooldownHint,
+    PLATFORM_SYNC_COOLDOWN_MS,
     hasItems,
     successCount,
     failedCount,
@@ -153,8 +221,10 @@ export const usePlatformSyncStore = defineStore('platformSync', () => {
     updateStoreStatus,
     updateItems,
     runAutoSyncOnLogin,
+    seedFromBackend,
     retry,
     resetSession,
     shouldAutoSync,
+    bindAuth,
   }
 })

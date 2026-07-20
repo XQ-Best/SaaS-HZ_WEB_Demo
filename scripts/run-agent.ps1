@@ -1,7 +1,8 @@
 # CrossHub Agent launcher (token injected by downloaded .bat)
 param(
     [string]$AgentToken = $env:AGENT_TOKEN,
-    [string]$JavaApiUrl = $env:JAVA_API_URL
+    [string]$JavaApiUrl = $env:JAVA_API_URL,
+    [switch]$ForceRestart
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,4 +34,32 @@ if (-not $py) {
     exit 4
 }
 
-& py $agentScript
+$existing = Get-CimInstance Win32_Process |
+    Where-Object {
+        $_.Name -match "^(py|python)\.exe$" -and
+        $_.CommandLine -match "run_agent\.py"
+    }
+
+if ($existing -and -not $ForceRestart) {
+    Write-Host "Agent is already running. Use -ForceRestart to restart it." -ForegroundColor Yellow
+    $existing | Select-Object ProcessId, Name, CommandLine | Format-Table -AutoSize
+    exit 0
+}
+
+if ($existing -and $ForceRestart) {
+    Write-Host "Stopping existing agent process(es)..." -ForegroundColor Yellow
+    foreach ($proc in $existing) {
+        try {
+            Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop
+            Write-Host "  stopped PID $($proc.ProcessId)" -ForegroundColor DarkYellow
+        } catch {
+            Write-Host "  failed to stop PID $($proc.ProcessId): $($_.Exception.Message)" -ForegroundColor Red
+        }
+    }
+    Start-Sleep -Seconds 1
+}
+
+Write-Host "Starting CrossHub Agent (unbuffered logs)..." -ForegroundColor Cyan
+Write-Host "  JAVA_API_URL=$($env:JAVA_API_URL)" -ForegroundColor DarkCyan
+
+& py -u $agentScript

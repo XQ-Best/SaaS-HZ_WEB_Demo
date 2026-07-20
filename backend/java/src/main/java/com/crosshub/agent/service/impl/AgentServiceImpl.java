@@ -32,7 +32,7 @@ import java.util.UUID;
 @Service
 public class AgentServiceImpl implements AgentService {
     private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-    private static final long AGENT_TASK_RUNNING_TTL_SECONDS = 16 * 60;
+    private static final long AGENT_TASK_RUNNING_TTL_SECONDS = 40 * 60;
     private static final long AGENT_TASK_DEFAULT_TTL_SECONDS = 10 * 60;
 
     private final IntegrationAgentRepository agentRepository;

@@ -33,7 +33,7 @@ public class AmazonController {
 
     @PostMapping("/sync")
     public ResponseEntity<Map<String, Object>> triggerSync(@RequestBody(required = false) AmazonSyncRequest request) {
-        AmazonSyncRequest body = request == null ? new AmazonSyncRequest("account_health", null) : request;
+        AmazonSyncRequest body = request == null ? new AmazonSyncRequest("account_health", null, null, null) : request;
         try {
             return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResult.ok(syncService.triggerSync(body)));
         } catch (AmazonSyncConflictException ex) {
@@ -51,14 +51,29 @@ public class AmazonController {
         return ApiResult.ok(toJobDto(syncService.getJob(jobId)));
     }
 
+    @GetMapping("/sync-versions")
+    public Map<String, Object> syncVersions(
+            @RequestParam(value = "store_id", required = false) String storeId,
+            @RequestParam(value = "scope", required = false) String scope,
+            @RequestParam(value = "limit", defaultValue = "20") int limit
+    ) {
+        return ApiResult.ok(operationalService.syncVersions(storeId, scope, limit));
+    }
+
     @GetMapping("/daily")
-    public Map<String, Object> daily(@RequestParam(value = "store_id", required = false) String storeId) {
-        return ApiResult.ok(operationalService.daily(storeId));
+    public Map<String, Object> daily(
+            @RequestParam(value = "store_id", required = false) String storeId,
+            @RequestParam(value = "sync_version_id", required = false) String syncVersionId
+    ) {
+        return ApiResult.ok(operationalService.daily(storeId, syncVersionId));
     }
 
     @GetMapping("/insights")
-    public Map<String, Object> insights(@RequestParam(value = "store_id", required = false) String storeId) {
-        return ApiResult.ok(operationalService.insights(storeId));
+    public Map<String, Object> insights(
+            @RequestParam(value = "store_id", required = false) String storeId,
+            @RequestParam(value = "sync_version_id", required = false) String syncVersionId
+    ) {
+        return ApiResult.ok(operationalService.insights(storeId, syncVersionId));
     }
 
     @GetMapping("/sp-api/status")

@@ -76,8 +76,12 @@ function closeMobileMenu() {
 onMounted(() => {
   syncMobileLayout()
   window.addEventListener('resize', syncMobileLayout)
-  if (syncStore.shouldAutoSync(auth)) {
-    void syncStore.runAutoSyncOnLogin(auth)
+  if (auth.backendLinked && !auth.isWarehouse) {
+    syncStore.bindAuth(auth)
+    void syncStore.seedFromBackend(auth)
+    if (syncStore.shouldAutoSync(auth)) {
+      void syncStore.runAutoSyncOnLogin(auth)
+    }
   }
 })
 

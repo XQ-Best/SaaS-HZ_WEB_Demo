@@ -1,4 +1,4 @@
-"""Business Report 爬取。"""
+"""Business Report DOM 爬取（已降级，仅 AMAZON_BR_DOM_FALLBACK=1 时作兜底）。"""
 from __future__ import annotations
 
 import re
@@ -66,34 +66,35 @@ def _prepare_business_report_page(page) -> None:
         pass
 
 
-def _scroll_br_table(page) -> None:
+def _scroll_br_table(page, *, scroll_steps: int = 30) -> None:
     try:
         page.evaluate(
-            """
-            async () => {
+            f"""
+            async () => {{
+              const scrollSteps = {scroll_steps};
               const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
               const roots = [];
-              const walk = (node) => {
+              const walk = (node) => {{
                 if (!node) return;
                 roots.push(node);
                 if (node.shadowRoot) walk(node.shadowRoot);
-                node.querySelectorAll?.('*').forEach((el) => { if (el.shadowRoot) walk(el.shadowRoot); });
-              };
+                node.querySelectorAll?.('*').forEach((el) => {{ if (el.shadowRoot) walk(el.shadowRoot); }});
+              }};
               walk(document);
               let scroller = null;
-              for (const root of roots) {
+              for (const root of roots) {{
                 scroller = root.querySelector('[role="grid"]')
                   || root.querySelector('kat-table')
                   || root.querySelector('.mt-table-container')
                   || root.querySelector('[class*="scroll"]');
                 if (scroller) break;
-              }
-              for (let i = 0; i < 30; i += 1) {
+              }}
+              for (let i = 0; i < scrollSteps; i += 1) {{
                 if (scroller) scroller.scrollTop += 800;
                 window.scrollBy(0, 1000);
                 await sleep(300);
-              }
-            }
+              }}
+            }}
             """
         )
         page.wait_for_timeout(2500)
@@ -101,20 +102,24 @@ def _scroll_br_table(page) -> None:
         pass
 
 
-def crawl_business_report(page, *, store_name: str = "") -> list[dict[str, Any]]:
-    for url in REPORT_URLS:
-        for attempt in range(3):
+def crawl_business_report(page, *, store_name: str = "", fast: bool = False) -> list[dict[str, Any]]:
+    report_urls = [REPORT_URLS[0]] if fast else REPORT_URLS
+    max_attempts = 1 if fast else 3
+    scroll_steps = 8 if fast else 30
+    network_idle_timeout = 20000 if fast else 35000
+    for url in report_urls:
+        for attempt in range(max_attempts):
             try:
                 page.goto(url, wait_until="domcontentloaded")
                 try:
-                    page.wait_for_load_state("networkidle", timeout=35000)
+                    page.wait_for_load_state("networkidle", timeout=network_idle_timeout)
                 except Exception:
                     pass
                 if attempt > 0:
                     page.reload(wait_until="domcontentloaded")
                     page.wait_for_timeout(4000)
                 _prepare_business_report_page(page)
-                extra_wait = 8000 + attempt * 5000
+                extra_wait = (5000 if fast else 8000) + attempt * (3000 if fast else 5000)
                 page.wait_for_timeout(extra_wait)
                 for selector in ("table tbody tr", "kat-table", "[role='grid']"):
                     try:
@@ -123,14 +128,14 @@ def crawl_business_report(page, *, store_name: str = "") -> list[dict[str, Any]]
                     except Exception:
                         continue
                 page.evaluate("() => { window.scrollTo(0, document.body.scrollHeight); }")
-                page.wait_for_timeout(3000 + attempt * 2000)
-                _scroll_br_table(page)
+                page.wait_for_timeout((2000 if fast else 3000) + attempt * (1000 if fast else 2000))
+                _scroll_br_table(page, scroll_steps=scroll_steps)
                 body = page.inner_text("body")
                 if looks_login_page(body, page.url):
                     break
                 if not re.search(r"(sales|traffic|asin|销售额|流量|ordered product|business report)", body, re.I):
                     save_capture(page, store_name=store_name, suffix=f"br_nodata_a{attempt}")
-                    if attempt < 2:
+                    if attempt < max_attempts - 1:
                         continue
                     break
                 table_rows: list[dict[str, Any]] = []
@@ -158,14 +163,14 @@ def crawl_business_report(page, *, store_name: str = "") -> list[dict[str, Any]]
                 with_metrics = [row for row in valid if has_report_metrics(row)]
                 if with_metrics:
                     return with_metrics
-                if valid and attempt == 2:
+                if valid and attempt == max_attempts - 1:
                     save_capture(page, store_name=store_name, suffix="br_no_metrics")
                 elif not valid:
                     save_capture(page, store_name=store_name, suffix=f"br_nodata_a{attempt}")
-                if attempt < 2:
+                if attempt < max_attempts - 1:
                     continue
             except Exception:
-                if attempt < 2:
+                if attempt < max_attempts - 1:
                     page.wait_for_timeout(3000)
                     continue
     return []

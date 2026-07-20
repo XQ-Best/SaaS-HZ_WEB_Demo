@@ -11,7 +11,6 @@ sys.path.insert(0, str(ROOT / "backend" / "python"))
 
 from app.amazon.composer.metrics_merger import coalesce_ads_summary
 from app.amazon.composer.product_composer import (
-    allocate_account_ads_by_revenue,
     cap_suspicious_order_metrics,
     enrich_product_rows,
 )
@@ -48,11 +47,8 @@ def main() -> None:
 
     print("BEFORE", field_coverage(products))
     products = cap_suspicious_order_metrics(products)
-    summary = coalesce_ads_summary({}, metrics)
-    products = allocate_account_ads_by_revenue(products, summary)
     products = enrich_product_rows(products)
     print("AFTER ", field_coverage(products))
-    print("ads_summary", summary)
     for row in products[:5]:
         print(
             row.get("asin"),

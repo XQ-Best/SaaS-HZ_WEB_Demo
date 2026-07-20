@@ -8,10 +8,10 @@ from typing import Any
 
 from app.amazon.composer.metrics_merger import coalesce_ads_summary, merge_ads_metrics
 from app.amazon.composer.product_composer import (
-    allocate_account_ads_by_revenue,
     compose_product_rows,
     enrich_product_rows,
     merge_campaign_ads_into_products,
+    merge_product_catalog,
 )
 from app.amazon.crawlers.account import (
     cases_from_seller_news,
@@ -20,14 +20,25 @@ from app.amazon.crawlers.account import (
     parse_home_news_and_cases,
 )
 from app.amazon.crawlers.business_report import crawl_business_report
+from app.amazon.crawlers.orders_v3 import crawl_orders_v3
+from app.amazon.sources.amazon_sync_config import (
+    ads_dom_fallback_enabled,
+    br_dom_fallback_enabled,
+    inventory_dom_fallback_enabled,
+    report_period_days,
+)
+from app.amazon.sources.business_report_csv import crawl_business_report_csv
+from app.amazon.sources.ads_asin_report_csv import crawl_ads_asin_csv
+from app.amazon.sources.data_quality import build_data_quality
+from app.amazon.sources.inventory_csv import crawl_inventory_csv
 from app.amazon.crawlers.campaign_manager import crawl_ads_data
 from app.amazon.crawlers.daily_ops import crawl_cases, crawl_messages, crawl_operational_lists, crawl_reviews
 from app.amazon.crawlers.inventory import (
     crawl_home_catalog,
+    crawl_inventory_for_asins,
     crawl_inventory_products,
     merge_catalog_sources,
 )
-from app.amazon.crawlers.orders_v3 import crawl_orders_v3
 from app.amazon.diagnostics import CrawlDiagnostics, PageDiagnostic
 from app.amazon.page_urls import HOME_URL
 from app.amazon.parsers.seller_pages import EXTRACT_DEEP_BODY_TEXT_JS
@@ -82,7 +93,16 @@ def _empty_result() -> dict[str, Any]:
     }
 
 
-def _record(diagnostic: CrawlDiagnostics, key: str, url: str, rows: list, started: float, warning: str = "") -> None:
+def _record(
+    diagnostic: CrawlDiagnostics,
+    key: str,
+    url: str,
+    rows: list,
+    started: float,
+    warning: str = "",
+    *,
+    capture_path: str = "",
+) -> None:
     diagnostic.add(
         PageDiagnostic(
             key=key,
@@ -91,7 +111,98 @@ def _record(diagnostic: CrawlDiagnostics, key: str, url: str, rows: list, starte
             rows=len(rows) if isinstance(rows, list) else 0,
             duration_ms=int((time.time() - started) * 1000),
             warning=warning,
+            capture_path=capture_path,
         )
+    )
+
+
+def _load_inventory_products(
+    page,
+    *,
+    store_name: str,
+    use_csv: bool,
+) -> tuple[list[dict[str, Any]], str, str, str]:
+    if use_csv:
+        csv_result = crawl_inventory_csv(page, store_name=store_name)
+        if csv_result.rows:
+            return csv_result.rows, "inv_csv", csv_result.page_url, ""
+        if inventory_dom_fallback_enabled():
+            dom_rows = crawl_inventory_products(page, store_name=store_name, max_pages=3, fast=False)
+            return dom_rows, "inventory_all_dom", page.url, "" if dom_rows else csv_result.warning
+        return [], "inv_csv", csv_result.page_url, csv_result.warning or "ZERO_ROWS"
+
+    dom_rows = crawl_inventory_products(page, store_name=store_name, max_pages=3, fast=False)
+    return dom_rows, "inventory_all", page.url, "" if dom_rows else "ZERO_ROWS"
+
+
+def _load_ads_campaigns(
+    page,
+    *,
+    store_name: str,
+    merchant_id: str,
+    use_csv: bool,
+) -> tuple[list[dict[str, Any]], dict[str, Any], str, str, str]:
+    if use_csv:
+        csv_result = crawl_ads_asin_csv(
+            page,
+            store_name=store_name,
+            merchant_id=merchant_id,
+            period_days=report_period_days(),
+        )
+        if csv_result.rows:
+            return csv_result.rows, {}, csv_result.merchant_id, "ads_csv", ""
+        if ads_dom_fallback_enabled():
+            summary, campaigns, resolved = crawl_ads_data(page, merchant_id=merchant_id, fast=False)
+            return campaigns, summary, resolved, "ads_campaign_manager_dom", "" if campaigns else csv_result.warning
+        return [], {}, csv_result.merchant_id, "ads_csv", csv_result.warning or "ADS_CSV_EMPTY"
+
+    summary, campaigns, resolved = crawl_ads_data(page, merchant_id=merchant_id, fast=False)
+    return campaigns, summary, resolved, "ads_campaign_manager", "" if campaigns else "ZERO_ROWS"
+
+
+def _load_business_report_products(
+    page,
+    *,
+    store_name: str,
+    use_csv: bool,
+) -> tuple[list[dict[str, Any]], str, str, int, str]:
+    """返回 (rows, diag_key, page_url, duration_ms, warning)。"""
+    if use_csv:
+        started = time.time()
+        csv_result = crawl_business_report_csv(page, store_name=store_name)
+        if csv_result.rows:
+            return (
+                csv_result.rows,
+                "br_csv",
+                csv_result.page_url,
+                csv_result.duration_ms or int((time.time() - started) * 1000),
+                "",
+            )
+        if br_dom_fallback_enabled():
+            dom_rows = crawl_business_report(page, store_name=store_name, fast=False)
+            return (
+                dom_rows,
+                "br_child_asin_dom",
+                page.url,
+                int((time.time() - started) * 1000),
+                "" if dom_rows else csv_result.warning or "ZERO_ROWS",
+            )
+        return (
+            [],
+            "br_csv",
+            csv_result.page_url,
+            csv_result.duration_ms,
+            csv_result.warning or "ZERO_ROWS",
+        )
+
+    started = time.time()
+    dom_rows = crawl_business_report(page, store_name=store_name, fast=False)
+    return (
+        dom_rows,
+        "br_child_asin",
+        page.url,
+        int((time.time() - started) * 1000),
+        "" if dom_rows else "ZERO_ROWS",
     )
 
 
@@ -122,6 +233,7 @@ def run_crawl(
 
     result = _empty_result()
     diagnostics = CrawlDiagnostics()
+    _login_required = False
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{debug_port}")
@@ -133,13 +245,17 @@ def run_crawl(
 
             started = time.time()
             page.goto(HOME_URL, wait_until="domcontentloaded")
-            page.wait_for_timeout(5000)
+            page.wait_for_timeout(3000 if normalized_scope == "reports" else 5000)
             try:
                 home_text = page.evaluate(EXTRACT_DEEP_BODY_TEXT_JS) or page.inner_text("body")
             except Exception:
                 home_text = page.inner_text("body")
             result["page_url"] = page.url
-            require_seller_logged_in(page, home_text, store_name=store_name)
+            try:
+                require_seller_logged_in(page, home_text, store_name=store_name)
+            except AmazonLoginRequiredError:
+                _login_required = True
+                raise
             ctx.ensure_merchant_id()
             _record(diagnostics, "home", HOME_URL, [{"ok": True}], started)
 
@@ -157,80 +273,124 @@ def run_crawl(
             order_rows: list[dict[str, Any]] = []
             br_count = 0
             catalog_count = 0
+            inv_count = 0
+            ads_count = 0
 
             if normalized_scope in {"daily", "reports"}:
+                use_br_csv = normalized_scope == "reports"
                 started = time.time()
                 home_products = crawl_home_catalog(page)
                 _record(diagnostics, "home_catalog", HOME_URL, home_products, started)
 
-                started = time.time()
-                report_products = crawl_business_report(page, store_name=store_name)
+                br_started = time.time()
+                report_products, br_key, br_url, _br_ms, br_warning = _load_business_report_products(
+                    page,
+                    store_name=store_name,
+                    use_csv=use_br_csv,
+                )
                 br_count = len(report_products)
                 _record(
                     diagnostics,
-                    "br_child_asin",
-                    page.url,
+                    br_key,
+                    br_url,
                     report_products,
-                    started,
-                    "" if report_products else "ZERO_ROWS",
+                    br_started,
+                    br_warning,
                 )
 
-                started = time.time()
-                inventory_products = crawl_inventory_products(page, store_name=store_name)
-                catalog_count = len(inventory_products)
+                inv_started = time.time()
+                inventory_products, inv_key, inv_url, inv_warning = _load_inventory_products(
+                    page,
+                    store_name=store_name,
+                    use_csv=use_br_csv,
+                )
+                inv_count = len(inventory_products)
+                catalog_count = inv_count
                 _record(
                     diagnostics,
-                    "inventory_all",
-                    page.url,
+                    inv_key,
+                    inv_url,
                     inventory_products,
-                    started,
-                    "" if inventory_products else "ZERO_ROWS",
+                    inv_started,
+                    inv_warning,
                 )
+
+                if use_br_csv and report_products:
+                    known = {str(r.get("asin") or "").upper(): r for r in inventory_products if r.get("asin")}
+                    missing_asins = [
+                        str(p.get("asin") or "").upper()
+                        for p in report_products
+                        if p.get("asin") and int(str(known.get(str(p.get("asin") or "").upper(), {}).get("inventory") or "0")) <= 0
+                    ]
+                    if missing_asins:
+                        search_started = time.time()
+                        searched = crawl_inventory_for_asins(
+                            page,
+                            missing_asins,
+                            store_name=store_name,
+                            max_asins=30,
+                        )
+                        if searched:
+                            inventory_products = merge_product_catalog(inventory_products, searched)
+                            inv_count = len(inventory_products)
+                            _record(
+                                diagnostics,
+                                "inventory_asin_search",
+                                inv_url,
+                                searched,
+                                search_started,
+                                "",
+                            )
 
                 inventory_products = merge_catalog_sources(
                     inventory_products,
                     home_products,
                     store_name=store_name,
-                    page=page,
+                    page=page if not (use_br_csv and br_count >= 5) else None,
                 )
                 catalog_count = max(catalog_count, len(inventory_products))
 
-                started = time.time()
-                order_rows = crawl_orders_v3(page)
-                if order_rows:
-                    result["outbound_orders"] = order_rows
-                _record(
-                    diagnostics,
-                    "orders_all",
-                    "orders-v3/*",
-                    order_rows,
-                    started,
-                    "" if order_rows else "ZERO_ROWS",
-                )
+                order_rows: list[dict[str, Any]] = []
+                if not use_br_csv:
+                    started = time.time()
+                    order_rows = crawl_orders_v3(page)
+                    if order_rows:
+                        result["outbound_orders"] = order_rows
+                    _record(
+                        diagnostics,
+                        "orders_all",
+                        "orders-v3/*",
+                        order_rows,
+                        started,
+                        "" if order_rows else "ZERO_ROWS",
+                    )
 
                 composed = compose_product_rows(
                     report_products,
                     inventory_products,
                     home_products,
-                    order_rows,
+                    None if use_br_csv else order_rows,
                 )
                 if composed:
                     result["products"] = enrich_product_rows(composed)
 
-                started = time.time()
-                ads_summary, ad_campaigns, resolved_merchant = crawl_ads_data(
+                ads_started = time.time()
+                ad_campaigns, ads_summary, resolved_merchant, ads_key, ads_warning = _load_ads_campaigns(
                     page,
+                    store_name=store_name,
                     merchant_id=ctx.merchant_id,
+                    use_csv=use_br_csv,
                 )
+                ads_count = len(ad_campaigns)
                 ctx.merchant_id = resolved_merchant or ctx.merchant_id
                 result["merchant_id"] = ctx.merchant_id
                 _record(
                     diagnostics,
-                    "ads_campaign_manager",
+                    ads_key,
                     page.url,
                     ad_campaigns,
-                    started,
-                    "" if ad_campaigns or ads_summary else "ZERO_ROWS",
+                    ads_started,
+                    ads_warning,
                 )
                 ads_summary = coalesce_ads_summary(ads_summary, result.get("metrics"))
                 if ads_summary:
@@ -241,15 +401,9 @@ def run_crawl(
                             result.get("products") or [],
                             ad_campaigns,
                         )
-                    if ads_summary:
-                        result["products"] = allocate_account_ads_by_revenue(
-                            result.get("products") or [],
-                            ads_summary,
-                        )
-
                     result["products"] = enrich_product_rows(result["products"])
 
-            if normalized_scope in {"daily", "reports"}:
+            if normalized_scope == "daily":
                 started = time.time()
                 coupons, shipments = crawl_operational_lists(page)
                 if coupons:
@@ -313,11 +467,22 @@ def run_crawl(
 
             diag_summary = diagnostics.summary()
             result["page_diagnostics"] = diag_summary["page_diagnostics"]
+            products = result.get("products") or []
+            result["data_quality"] = build_data_quality(
+                scope=normalized_scope,
+                products=products,
+                br_count=br_count,
+                inv_count=inv_count,
+                ads_count=ads_count,
+                diagnostics=diag_summary["page_diagnostics"],
+                warnings=diag_summary.get("warnings"),
+            )
             result["result_summary"] = {
                 **diag_summary,
-                "products_count": len(result.get("products") or []),
+                "products_count": len(products),
                 "orders_count": len(result.get("outbound_orders") or []),
                 "merchant_id": result.get("merchant_id") or "",
+                "data_quality": result.get("data_quality") or {},
             }
             if result.get("product_sync_warning"):
                 result["result_summary"]["warnings"] = list(
@@ -340,13 +505,15 @@ def run_crawl(
                 browser.close()
             except Exception:
                 pass
-            try:
-                ziniao.stop_browser(
-                    browser_id=browser_id or None,
-                    browser_oauth=browser_oauth or None,
-                )
-            except Exception:
-                pass
+            # 登录失效时保留紫鸟浏览器窗口，让用户能手动完成登录/验证码
+            if not _login_required:
+                try:
+                    ziniao.stop_browser(
+                        browser_id=browser_id or None,
+                        browser_oauth=browser_oauth or None,
+                    )
+                except Exception:
+                    pass
 
 
 def crawl_account_health(**kwargs: Any) -> dict[str, Any]:

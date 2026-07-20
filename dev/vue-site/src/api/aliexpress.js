@@ -21,9 +21,9 @@ export function loadAliExpressOperationalData(stores, auth) {
 }
 
 export async function fetchTodayAliExpressOrders(stores, options = {}) {
-  const { auth, refresh = false, storeId } = options
+  const { auth, refresh = false, storeId, ...crawlOptions } = options
   if (canUseAliExpressBackend(auth)) {
-    const data = await fetchTodayAliExpressOrdersFromApi({ storeId, refresh })
+    const data = await fetchTodayAliExpressOrdersFromApi({ storeId, refresh, ...crawlOptions })
     return {
       data: {
         orders: data.orders,
@@ -68,7 +68,7 @@ export async function crawlAliExpressViolations(stores, options = {}) {
         message: '',
       }
     }
-    const data = await crawlAliExpressViolationsFromApi()
+    const data = await crawlAliExpressViolationsFromApi(options)
     return {
       data,
       message: `已同步 ${data.violations.length} 条违规记录`,

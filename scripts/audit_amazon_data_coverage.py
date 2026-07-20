@@ -154,6 +154,39 @@ def field_filled(row: dict, field: str) -> bool:
     return bool(val)
 
 
+def parse_money_text(value: object) -> float:
+    if value is None:
+        return 0.0
+    cleaned = str(value).replace("US$", "").replace("$", "").replace(",", "").strip()
+    try:
+        return float(cleaned)
+    except ValueError:
+        return 0.0
+
+
+def audit_synthetic_acos(rows: list[sqlite3.Row]) -> tuple[bool, list[str]]:
+    """检测账户级 ACOS 分摊等合成痕迹。返回 (通过, 原因列表)。"""
+    issues: list[str] = []
+    with_acos = [dict(r) for r in rows if float(r["acos"] or 0) > 0]
+    if len(with_acos) >= 5:
+        distinct_acos = {round(float(r["acos"]), 2) for r in with_acos}
+        if len(distinct_acos) == 1:
+            issues.append(
+                f"AUTH FAIL: {len(with_acos)} 个 SKU 的 ACOS 完全相同 ({next(iter(distinct_acos))}%)"
+            )
+    ratios: list[float] = []
+    for row in with_acos:
+        rev = parse_money_text(row.get("revenue_30d"))
+        spend = parse_money_text(row.get("ad_spend_30d"))
+        if rev > 0 and spend > 0:
+            ratios.append(round(spend / rev, 4))
+    if len(ratios) >= 5 and len(set(ratios)) == 1:
+        issues.append(
+            f"AUTH FAIL: {len(ratios)} 个 SKU 的 ad_spend/revenue 固定比率 {ratios[0]}（疑似反算）"
+        )
+    return (len(issues) == 0, issues)
+
+
 def main() -> int:
     if not DB.exists():
         print(f"DB missing: {DB}", file=sys.stderr)
@@ -183,6 +216,7 @@ def main() -> int:
 
     tenant_ids = sorted({acc["tenant_id"] for acc in accounts})
     missing_features: list[dict] = []
+    auth_issues: list[str] = []
 
     # --- sync jobs per scope ---
     print("\n[同步任务] 各 scope 最近一次：")
@@ -301,6 +335,20 @@ def main() -> int:
                 "reason": f"全部 {total} 个 SKU 的 {label} 为空 — 需 scope=reports + 对应页面解析",
             })
 
+    print("\n[数据真实性 AUTH] 反造假快检：")
+    auth_ok, auth_issues = audit_synthetic_acos(products)
+    if auth_ok:
+        print("  PASS: 未检测到全 SKU 相同 ACOS / 固定 spend 比率")
+    else:
+        for issue in auth_issues:
+            print(f"  {issue}")
+        missing_features.append({
+            "feature": "auth.synthetic_acos",
+            "ui": "产品 TOP20 · 广告指标真实性",
+            "count": len(products),
+            "reason": "; ".join(auth_issues),
+        })
+
     # --- feature-level pass/fail ---
     print("\n[功能模块] 全量审查结果：")
     feature_checks = {
@@ -399,7 +447,7 @@ def main() -> int:
             pass
 
     print()
-    return 0
+    return 1 if auth_issues else 0
 
 
 def _missing_reason(feature_id: str, conn: sqlite3.Connection) -> str:

@@ -2,8 +2,8 @@
 
 export const ACOS_THRESHOLDS = {
   good: 20,
-  warning: 30,
-  danger: 40,
+  warning: 35,
+  danger: 50,
 }
 
 export const ACOS_LEVEL_META = {

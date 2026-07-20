@@ -109,10 +109,7 @@ SCOPE_TASK_KEYS: dict[str, list[str]] = {
         "home",
         "br_child_asin",
         "inventory_all",
-        *[f"orders_{spec['key']}" for spec in ORDER_LIST_SPECS],
         "ads_campaign_manager",
-        "coupons",
-        "shipments",
     ],
     "insights": [
         "home",

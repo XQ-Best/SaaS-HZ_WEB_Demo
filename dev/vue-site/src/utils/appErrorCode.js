@@ -18,6 +18,7 @@ export const APP_ERROR_MESSAGES = {
   CRAWL_SEED_DISABLED: '当前环境不允许演示数据同步',
   CRAWL_JOB_NOT_FOUND: '同步任务不存在',
   CRAWL_INTERRUPTED: '同步任务已中断，请重新刷新',
+  CRAWL_COOLDOWN: '同步冷却中，请稍后再试或使用侧栏「重新同步」强制刷新',
 
   COMPETITOR_LOGIN_REQUIRED: 'Temu 前台需要登录或验证，已打开登录窗口，请完成后关闭窗口再重试',
   COMPETITOR_STORE_UNAVAILABLE: '该竞店在当前地区或账号下不可访问，请更换可访问的店铺链接',

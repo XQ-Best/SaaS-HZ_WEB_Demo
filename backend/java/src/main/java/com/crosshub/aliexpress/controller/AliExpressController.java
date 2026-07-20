@@ -41,7 +41,7 @@ public class AliExpressController {
 
     @PostMapping("/crawl")
     public ResponseEntity<Map<String, Object>> trigger(@RequestBody(required = false) AliExpressCrawlRequest request) {
-        AliExpressCrawlRequest body = request == null ? new AliExpressCrawlRequest(null, null) : request;
+        AliExpressCrawlRequest body = request == null ? new AliExpressCrawlRequest(null, null, null, null) : request;
         try {
             return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResult.ok(toJobDto(crawlService.triggerCrawl(body))));
         } catch (AliExpressCrawlConflictException ex) {
@@ -60,9 +60,11 @@ public class AliExpressController {
     }
 
     @PostMapping("/violations/sync")
-    public ResponseEntity<Map<String, Object>> syncViolations() {
+    public ResponseEntity<Map<String, Object>> syncViolations(@RequestBody(required = false) Map<String, Object> body) {
+        boolean force = body != null && Boolean.TRUE.equals(body.get("force"));
+        boolean recordCooldown = body == null || body.get("record_cooldown") == null || Boolean.TRUE.equals(body.get("record_cooldown"));
         try {
-            return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResult.ok(toJobDto(crawlService.triggerViolationSync())));
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResult.ok(toJobDto(crawlService.triggerViolationSync(force, recordCooldown))));
         } catch (AliExpressCrawlConflictException ex) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiResult.conflict(
                     409,

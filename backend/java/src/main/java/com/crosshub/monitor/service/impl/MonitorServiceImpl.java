@@ -5,6 +5,7 @@ import com.crosshub.config.CrawlerProperties;
 import com.crosshub.monitor.service.MonitorJobConflictException;
 import com.crosshub.monitor.service.MonitorService;
 import com.crosshub.security.AuthContext;
+import com.crosshub.common.TenantCrawlCooldownService;
 import com.crosshub.tenant.service.DataScopeService;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -31,17 +32,20 @@ public class MonitorServiceImpl implements MonitorService {
     private final DataScopeService dataScopeService;
     private final AuthContext authContext;
     private final CrawlerProperties crawlerProperties;
+    private final TenantCrawlCooldownService crawlCooldownService;
 
     public MonitorServiceImpl(
             JdbcTemplate jdbc,
             DataScopeService dataScopeService,
             AuthContext authContext,
-            CrawlerProperties crawlerProperties
+            CrawlerProperties crawlerProperties,
+            TenantCrawlCooldownService crawlCooldownService
     ) {
         this.jdbc = jdbc;
         this.dataScopeService = dataScopeService;
         this.authContext = authContext;
         this.crawlerProperties = crawlerProperties;
+        this.crawlCooldownService = crawlCooldownService;
     }
 
     @Override
@@ -196,6 +200,8 @@ public class MonitorServiceImpl implements MonitorService {
         }
 
         boolean force = boolValue(payload == null ? null : payload.get("force"));
+        boolean bypassCooldown = boolValue(payload == null ? null : payload.get("bypass_cooldown"));
+        crawlCooldownService.assertAllowed(tenantId, bypassCooldown);
         String reason = text(payload, "reason", "manual refresh");
         String jobId = "mj_" + UUID.randomUUID().toString().replace("-", "");
         String now = now();

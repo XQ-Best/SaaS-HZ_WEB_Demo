@@ -72,7 +72,7 @@ export function summarizeTopProducts(products = [], limit = 20) {
     orders7d: Number(p.orders7d) || 0,
     sessions7d: Number(p.sessions7d) || 0,
     conversionRate: Number(p.conversionRate) || 0,
-    profitMargin: Number(p.profitMargin) || 0,
+    profitMargin: p.profitMargin == null ? null : Number(p.profitMargin) || 0,
   }))
   const hasActivity = (item) => item.revenue7d > 0 || item.orders7d > 0 || item.sessions7d > 0 || item.adSpend7d > 0
   const active = normalized.filter(hasActivity)
@@ -103,7 +103,7 @@ export function summarizeTopProducts(products = [], limit = 20) {
     totalRevenueText: formatAmazonMoney(totalRevenue, 'USD'),
     totalAdSpend,
     totalAdSpendText: totalAdSpend ? formatAmazonMoney(totalAdSpend, 'USD') : '—',
-    hasAdData: totalAdSpend > 0 || withAcos.length > 0,
+    hasAdData: top.some((p) => p.adSpend7d > 0),
   }
 }
 

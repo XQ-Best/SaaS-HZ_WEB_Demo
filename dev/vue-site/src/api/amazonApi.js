@@ -1,12 +1,21 @@
 import axios from 'axios'
 import { AppApiError, getAppErrorMessage, toAppApiError } from '@/utils/appErrorCode'
+import {
+  assertPlatformCrawlAllowed,
+  applyCrawlRequestFlags,
+  isPlatformSyncBatchOptions,
+  markPlatformCrawlOnSuccess,
+  normalizeCrawlOptions,
+  PLATFORM_SYNC_BATCH_GUARD,
+  throwIfCrawlCooldownResponse,
+} from '@/utils/platformSyncCooldown'
 import { service, getAccessToken } from './request'
 import { isTemuBackendEnabled, TEMU_API_BASE_URL } from './config'
 import { isBackendLinked } from './backendSession'
 import { parseAmazonAmount, isValidAmazonProduct } from '@/utils/amazonBoss'
 
 const SYNC_POLL_MS = 2000
-const SYNC_MAX_WAIT_MS = 960000
+const SYNC_MAX_WAIT_MS = 2400000
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -139,11 +148,11 @@ function mapProduct(row) {
     revenue7d: parseAmazonAmount(row.revenue7d ?? row.revenue_30d ?? 0),
     adSpend7d: parseAmazonAmount(row.adSpend7d ?? row.ad_spend_30d ?? 0),
     acos: Number(row.acos ?? 0),
-    tacos: Number(row.tacos ?? row.acos ?? 0),
+    tacos: Number(row.tacos ?? 0),
     sessions7d: Number(row.sessions7d ?? row.page_views ?? 0),
     conversionRate: Number(row.conversion_rate ?? row.conversionRate ?? 0),
     unitsOnHand: Number(row.unitsOnHand ?? row.inventory ?? 0),
-    profitMargin: Number(row.profit_margin ?? row.profitMargin ?? 0),
+    profitMargin: row.profit_margin ?? row.profitMargin ?? null,
     currency: row.currency || 'USD',
     rank: Number(row.rank ?? row.rank_no ?? 0),
   }
@@ -187,6 +196,24 @@ function mapDailyPayload(data, stores = []) {
   }
 }
 
+function mapDataQuality(data) {
+  const raw = data?.data_quality ?? data?.dataQuality ?? {}
+  if (!raw || typeof raw !== 'object') return null
+  return {
+    periodDays: Number(raw.period_days ?? raw.periodDays ?? 0) || 0,
+    brSource: raw.br_source ?? raw.brSource ?? '',
+    inventorySource: raw.inventory_source ?? raw.inventorySource ?? '',
+    adsSource: raw.ads_source ?? raw.adsSource ?? '',
+    brRows: Number(raw.br_rows ?? raw.brRows ?? 0) || 0,
+    inventoryRows: Number(raw.inventory_rows ?? raw.inventoryRows ?? 0) || 0,
+    adsRows: Number(raw.ads_rows ?? raw.adsRows ?? 0) || 0,
+    productsWithRevenue: Number(raw.products_with_revenue ?? raw.productsWithRevenue ?? 0) || 0,
+    productsWithAdSpend: Number(raw.products_with_ad_spend ?? raw.productsWithAdSpend ?? 0) || 0,
+    productsWithInventory: Number(raw.products_with_inventory ?? raw.productsWithInventory ?? 0) || 0,
+    warnings: Array.isArray(raw.warnings) ? raw.warnings : [],
+  }
+}
+
 function mapInsightsPayload(data, stores = []) {
   const boundIds = new Set((stores || []).map((s) => s.id))
   const filterByStore = (items) =>
@@ -196,6 +223,7 @@ function mapInsightsPayload(data, stores = []) {
     products: filterByStore((data?.products || []).map(mapProduct).filter(isValidAmazonProduct)),
     outboundOrders: filterByStore((data?.outbound_orders || data?.outboundOrders || []).map(mapOutbound)),
     syncedAt: data?.synced_at ?? data?.syncedAt ?? '',
+    dataQuality: mapDataQuality(data),
   }
 }
 
@@ -212,12 +240,16 @@ export async function fetchAmazonInsightsFromBackend(stores = []) {
 }
 
 export async function triggerAmazonSync(options = {}) {
+  const crawlOpts = normalizeCrawlOptions(options)
+  assertPlatformCrawlAllowed(null, crawlOpts)
+
   const body = {
     scope: options.scope || 'account_health',
   }
   if (options.platformAccountId) {
     body.platform_account_id = options.platformAccountId
   }
+  applyCrawlRequestFlags(body, options)
 
   const token = getAccessToken()
   const res = await axios.post('/api/amazon/sync', body, {
@@ -232,6 +264,7 @@ export async function triggerAmazonSync(options = {}) {
 
   const payload = res.data
   const data = unwrapData(payload)
+  throwIfCrawlCooldownResponse(res, payload, '触发 Amazon 同步失败')
   if (res.status === 202 || payload?.code === 0 || payload?.success) {
     return { success: true, conflict: false, data }
   }
@@ -306,6 +339,8 @@ async function refreshWithSync(stores, options, fetcher, message) {
     throw new AppApiError('后端未启用', 'SERVER_ERROR')
   }
 
+  const crawlOpts = normalizeCrawlOptions(options)
+
   const started = await triggerAmazonSync(options)
   const jobIds = collectJobIds(started)
   if (!jobIds.length) {
@@ -317,7 +352,7 @@ async function refreshWithSync(stores, options, fetcher, message) {
   const res = await fetcher(stores)
   const lastJob = outcomes[outcomes.length - 1] || {}
   const resultSummary = lastJob.result_summary || lastJob.resultSummary || {}
-  return {
+  const result = {
     success: true,
     partial: Boolean(waitOptions.partial),
     warning: waitOptions.partialWarning || '',
@@ -329,6 +364,8 @@ async function refreshWithSync(stores, options, fetcher, message) {
       : (started.conflict ? '已等待进行中的同步任务完成' : message),
     data: res.data,
   }
+  markPlatformCrawlOnSuccess(null, result, { enabled: crawlOpts.recordCooldown })
+  return result
 }
 
 export async function refreshAmazonDailyWithSync(stores = [], options = {}) {
@@ -359,16 +396,21 @@ export async function refreshAmazonReportsWithSync(stores = [], options = {}) {
 }
 
 export async function refreshAmazonAllWithSync(stores = [], options = {}) {
+  const innerOpts = {
+    ...options,
+    [PLATFORM_SYNC_BATCH_GUARD]: true,
+    recordCooldown: false,
+  }
   const [dailyResult, reportsResult] = await Promise.allSettled([
     refreshWithSync(
       stores,
-      { scope: 'daily', platformAccountId: options.platformAccountId },
+      { scope: 'daily', platformAccountId: options.platformAccountId, ...innerOpts },
       fetchAmazonDailyFromBackend,
       '已刷新今日运营数据',
     ),
     refreshWithSync(
       stores,
-      { scope: 'reports', platformAccountId: options.platformAccountId },
+      { scope: 'reports', platformAccountId: options.platformAccountId, ...innerOpts },
       fetchAmazonInsightsFromBackend,
       '已刷新 Business Report 产品数据',
     ),
@@ -388,13 +430,13 @@ export async function refreshAmazonAllWithSync(stores = [], options = {}) {
   const insightsData = reportsResult.status === 'fulfilled' ? reportsResult.value.data : null
   const partial = [dailyResult, reportsResult].some(
     (item) => item.status === 'fulfilled' && item.value.partial,
-  )
+  ) || errors.length > 0
   const warning = [dailyResult, reportsResult]
     .filter((item) => item.status === 'fulfilled' && item.value.partial)
     .map((item) => item.value.warning)
     .find(Boolean)
 
-  return {
+  const result = {
     success: true,
     partial,
     warning,
@@ -409,6 +451,10 @@ export async function refreshAmazonAllWithSync(stores = [], options = {}) {
     dailyData,
     insightsData,
   }
+  markPlatformCrawlOnSuccess(null, result, {
+    enabled: options.recordCooldown ?? !isPlatformSyncBatchOptions(options),
+  })
+  return result
 }
 
 export async function fetchAmazonSpApiStatus() {

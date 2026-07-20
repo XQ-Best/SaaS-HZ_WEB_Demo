@@ -1,7 +1,6 @@
 """Amazon 多源产品行合成。"""
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from app.amazon.composer.product_filters import (
@@ -11,6 +10,7 @@ from app.amazon.composer.product_filters import (
     parse_money_text,
     sanitize_br_rows,
 )
+from app.amazon.sources.amazon_sync_config import report_period_days
 
 _ASIN_RE = __import__("re").compile(r"^[A-Z0-9]{10}$", __import__("re").I)
 
@@ -202,40 +202,6 @@ def cap_suspicious_order_metrics(products: list[dict[str, Any]]) -> list[dict[st
     return capped
 
 
-def allocate_account_ads_by_revenue(
-    products: list[dict[str, Any]],
-    ads_summary: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """账户级广告汇总无法映射 ASIN 时，按销售额比例分摊（仅当 SKU 级花费全空）。"""
-    if any(parse_money_text(item.get("ad_spend_30d")) > 0 for item in products):
-        return products
-    total_revenue = sum(parse_money_text(item.get("revenue_30d")) for item in products)
-    if total_revenue <= 0:
-        return products
-    acos_raw = ads_summary.get("acos")
-    try:
-        account_acos = float(str(acos_raw).replace("%", "").strip()) if acos_raw not in (None, "") else 0.0
-    except ValueError:
-        account_acos = 0.0
-    spend = parse_money_text(ads_summary.get("ad_spend_30d"))
-    if spend <= 0 and account_acos > 0:
-        spend = total_revenue * account_acos / 100.0
-    if spend <= 0:
-        return products
-    merged = [dict(item) for item in products]
-    for row in merged:
-        revenue = parse_money_text(row.get("revenue_30d"))
-        if revenue <= 0:
-            continue
-        share = revenue / total_revenue
-        row["ad_spend_30d"] = _format_money_str(spend * share)
-        if account_acos > 0:
-            row["acos"] = account_acos
-        elif spend > 0:
-            row["acos"] = round(spend * share / revenue * 100, 1)
-    return merged
-
-
 def merge_campaign_ads_into_products(
     products: list[dict[str, Any]],
     campaigns: list[dict[str, Any]],
@@ -266,8 +232,6 @@ def merge_campaign_ads_into_products(
                 if len(name) >= 6 and name in campaign_name:
                     target = product
                     break
-        if target is None and len(merged) == 1:
-            target = merged[0]
         if target is None:
             continue
 
@@ -279,8 +243,6 @@ def merge_campaign_ads_into_products(
             target["acos"] = acos
         elif revenue > 0 and total_spend > 0:
             target["acos"] = round(total_spend / revenue * 100, 1)
-        if not target.get("tacos") and target.get("acos"):
-            target["tacos"] = target["acos"]
     return merged
 
 
@@ -294,20 +256,24 @@ def enrich_product_rows(products: list[dict[str, Any]]) -> list[dict[str, Any]]:
         spend = parse_money_text(row.get("ad_spend_30d"))
         if revenue > 0:
             row["revenue_30d"] = _format_money_str(revenue)
-        if spend > 0:
+        if spend <= 0:
+            row["ad_spend_30d"] = ""
+            row["acos"] = ""
+            row["tacos"] = ""
+        else:
             row["ad_spend_30d"] = _format_money_str(spend)
-        acos_raw = row.get("acos")
-        try:
-            acos = float(str(acos_raw).replace("%", "").strip()) if acos_raw not in (None, "") else 0.0
-        except ValueError:
-            acos = 0.0
-        if acos <= 0 and spend > 0 and revenue > 0:
-            acos = round(spend / revenue * 100, 1)
-            row["acos"] = acos
-        if not row.get("tacos") and acos > 0:
-            row["tacos"] = acos
-        elif not row.get("tacos") and spend > 0 and revenue > 0:
-            row["tacos"] = round(spend / revenue * 100, 1)
+            acos_raw = row.get("acos")
+            try:
+                acos = float(str(acos_raw).replace("%", "").strip()) if acos_raw not in (None, "") else 0.0
+            except ValueError:
+                acos = 0.0
+            if acos <= 0 and revenue > 0:
+                acos = round(spend / revenue * 100, 1)
+                row["acos"] = acos
+            if revenue > 0:
+                row["tacos"] = round(spend / revenue * 100, 1)
+            else:
+                row["tacos"] = ""
         if not row.get("conversion_rate"):
             page_views = parse_money_text(row.get("page_views"))
             orders = parse_money_text(row.get("orders_30d"))
@@ -315,59 +281,8 @@ def enrich_product_rows(products: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 row["conversion_rate"] = round(orders / page_views * 100, 2)
         if parse_money_text(row.get("inventory")) <= 0:
             row.setdefault("inventory", "0")
-        row.setdefault("period_days", 30)
+        row.setdefault("period_days", report_period_days())
         enriched.append(row)
-    return enriched
-
-
-def _name_tokens(name: str) -> set[str]:
-    return {
-        token.lower()
-        for token in re.findall(r"[A-Za-z0-9]{3,}", str(name or ""))
-        if len(token) >= 3 and not token.isdigit()
-    }
-
-
-def enrich_from_related_inventory(
-    products: list[dict[str, Any]],
-    inventory_rows: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """库存页 GR/X00 行与 B0 商品名相近时，补全会话与 FBA 可售。"""
-    if not products or not inventory_rows:
-        return products
-    donors = [
-        row
-        for row in inventory_rows
-        if isinstance(row, dict)
-        and (
-            parse_money_text(row.get("page_views")) > 0
-            or parse_money_text(row.get("inventory")) > 0
-        )
-    ]
-    if not donors:
-        return products
-    enriched = [dict(item) for item in products if isinstance(item, dict)]
-    for row in enriched:
-        needs_pv = parse_money_text(row.get("page_views")) <= 0
-        needs_inv = parse_money_text(row.get("inventory")) <= 0
-        if not needs_pv and not needs_inv:
-            continue
-        tokens = _name_tokens(row.get("product_name"))
-        if len(tokens) < 3:
-            continue
-        best: dict[str, Any] | None = None
-        best_score = 0
-        for donor in donors:
-            score = len(tokens & _name_tokens(donor.get("product_name")))
-            if score > best_score:
-                best_score = score
-                best = donor
-        if not best or (best_score < 2 and not (best_score >= 1 and "yoto" in tokens)):
-            continue
-        if needs_pv and parse_money_text(best.get("page_views")) > 0:
-            row["page_views"] = best["page_views"]
-        if needs_inv and parse_money_text(best.get("inventory")) > 0:
-            row["inventory"] = best["inventory"]
     return enriched
 
 
@@ -411,7 +326,6 @@ def compose_product_rows(
         composed = aggregate_orders_into_products(composed, order_rows)
 
     composed = merge_catalog_metrics_into_products(composed, raw_metrics)
-    composed = enrich_from_related_inventory(composed, inventory_rows)
     for row in composed:
         asin = str(row.get("asin") or "").strip().upper()
         catalog = catalog_by_asin.get(asin)

@@ -226,6 +226,104 @@ EXTRACT_PERFORMANCE_TABLE_JS = """
 EXTRACT_BUSINESS_REPORT_JS = EXTRACT_PERFORMANCE_TABLE_JS
 EXTRACT_PRODUCTS_JS = EXTRACT_BUSINESS_REPORT_JS
 
+EXTRACT_MYINVENTORY_GRID_JS = """
+() => {
+  const rows = [];
+  const seen = new Set();
+  const integer = (value) => {
+    const match = String(value || '').replace(/,/g, '').match(/(\\d+)/);
+    return match ? match[1] : '0';
+  };
+  const asinFrom = (text) => {
+    const blob = String(text || '');
+    const inline = blob.match(/ASIN[:\\s]+([A-Z0-9]{10})/i);
+    if (inline) return inline[1].toUpperCase();
+    const lines = blob.split(/\\n+/).map((l) => l.trim());
+    for (let i = 0; i < lines.length - 1; i += 1) {
+      if (/^asin$/i.test(lines[i]) && /^[A-Z0-9]{10}$/i.test(lines[i + 1])) {
+        return lines[i + 1].toUpperCase();
+      }
+    }
+    return '';
+  };
+  const pickInventory = (blob) => {
+    const lines = String(blob || '').split(/\\n+/).map((l) => l.trim()).filter(Boolean);
+    const readAfter = (re) => {
+      for (let i = 0; i < lines.length - 1; i += 1) {
+        if (!re.test(lines[i])) continue;
+        const nxt = lines[i + 1];
+        if (nxt && nxt !== '--' && nxt !== '—') return integer(nxt);
+      }
+      return '';
+    };
+    const avail = readAfter(/^(available|可售|fulfillable|亚马逊物流可售)$/i);
+    if (avail) return avail;
+    const onHand = readAfter(/^(on-hand\\s*\\(fba\\)|在库|on hand)$/i);
+    if (onHand) return onHand;
+    const text = String(blob || '').replace(/\\s+/g, ' ');
+    const inline = text.match(/Available\\D{0,12}(\\d[\\d,]*)/i);
+    if (inline) return integer(inline[1]);
+    return '0';
+  };
+  const pickName = (blob, asin) => {
+    const lines = String(blob || '').split(/\\n+/).map((l) => l.trim()).filter(Boolean);
+    for (const line of lines) {
+      if (line.length > 20 && !/^ASIN/i.test(line) && !/^(Active|Inactive|Out of stock)/i.test(line) && !line.includes(asin)) {
+        return line.slice(0, 180);
+      }
+    }
+    return asin;
+  };
+  const candidates = document.querySelectorAll('tr, [role="row"], [class*="inventory-row"], [class*="InventoryRow"], kat-table-row');
+  for (const node of candidates) {
+    const blob = node.innerText || '';
+    const asin = asinFrom(blob);
+    if (!asin || seen.has(asin)) continue;
+    seen.add(asin);
+    rows.push({
+      rank_no: rows.length + 1,
+      product_name: pickName(blob, asin),
+      asin,
+      sku: '',
+      revenue_30d: '',
+      orders_30d: '0',
+      page_views: '0',
+      ad_spend_30d: '',
+      acos: '',
+      tacos: '',
+      conversion_rate: '',
+      inventory: pickInventory(blob),
+      currency: 'USD',
+    });
+  }
+  if (!rows.length) {
+    const body = document.body.innerText || '';
+    const parts = body.split(/(?=ASIN[:\\s]+[A-Z0-9]{10})/i);
+    for (const part of parts) {
+      const asin = asinFrom(part);
+      if (!asin || seen.has(asin)) continue;
+      seen.add(asin);
+      rows.push({
+        rank_no: rows.length + 1,
+        product_name: pickName(part, asin),
+        asin,
+        sku: '',
+        revenue_30d: '',
+        orders_30d: '0',
+        page_views: '0',
+        ad_spend_30d: '',
+        acos: '',
+        tacos: '',
+        conversion_rate: '',
+        inventory: pickInventory(part),
+        currency: 'USD',
+      });
+    }
+  }
+  return rows.slice(0, 120);
+}
+"""
+
 EXTRACT_INVENTORY_JS = """
 () => {
   const STATUS_ONLY = /^(在售|停售|缺货|active|inactive|out of stock|–|-)$/i;
@@ -256,7 +354,7 @@ EXTRACT_INVENTORY_JS = """
     { key: 'asin', pattern: /asin/i },
     { key: 'sku', pattern: /sku/i },
     { key: 'product_name', pattern: /(title|商品|product name)/i },
-    { key: 'inventory', pattern: /(available|可售|available quantity|inventory|库存|in stock|fba)/i },
+    { key: 'inventory', pattern: /(available|可售|fulfillable|amazon.*fulfill|fba)/i },
   ];
   const rows = [];
   const seen = new Set();
@@ -355,13 +453,15 @@ EXTRACT_INVENTORY_CARDS_JS = """
     return match ? match[1] : '0';
   };
   const labelRules = [
-    [/^(可售|available)$/i, 'inventory'],
+    [/^(可售|available|fulfillable)$/i, 'inventory'],
+    [/(亚马逊|amazon).*(可售|fulfillable)|fba.*(可售|available)|^fba$/i, 'inventory'],
     [/^(在库|on hand|on-hand)$/i, 'on_hand'],
-    [/^(FBA\\s*可售|available\\s*\\(fba\\)|fulfillable)$/i, 'inventory'],
+    [/^(FBA\\s*可售|available\\s*\\(fba\\))$/i, 'inventory'],
     [/^(页面浏览量|page views?|sessions?)$/i, 'page_views'],
     [/^(售出件数|units sold|ordered units|销量)$/i, 'orders_30d'],
     [/^(销售额|sales)$/i, 'revenue_30d'],
     [/^(可售数量|available quantity)$/i, 'inventory_alt'],
+    [/^(入库|inbound|inbound quantity)$/i, 'inbound'],
   ];
   const isAsinLine = (line) => {
     if (!asinRe.test(line)) return false;
@@ -432,6 +532,12 @@ EXTRACT_INVENTORY_CARDS_JS = """
     if (!asin) return;
     const productName = lines.find((line) => line.length > 24 && !/^asin$|^sku$/i.test(line)) || asin;
     const metrics = parseMetricsFromLines(lines);
+    for (let j = 0; j < lines.length - 1; j += 1) {
+      if (/(亚马逊|amazon|物流).*(可售|fulfill)|^fba$|^mfn$|^available$/i.test(lines[j])) {
+        const val = integer(lines[j + 1]);
+        if (val !== '0') metrics.inventory = val;
+      }
+    }
     upsert(map, asin, { product_name: productName, ...metrics });
   });
 
@@ -905,13 +1011,15 @@ def parse_inventory_cards_from_text(text: str) -> list[dict[str, Any]]:
     lines = [line.strip() for line in body.splitlines() if line.strip()]
     asin_re = re.compile(r"^[A-Z0-9]{10}$", re.I)
     label_rules = [
-        (re.compile(r"^(可售|available)$", re.I), "inventory"),
+        (re.compile(r"^(可售|available|fulfillable)$", re.I), "inventory"),
+        (re.compile(r"(亚马逊|amazon).*(可售|fulfillable)|fba.*(可售|available)", re.I), "inventory"),
+        (re.compile(r"^on-hand\s*\(fba\)$", re.I), "on_hand"),
         (re.compile(r"^(在库|on hand|on-hand)$", re.I), "on_hand"),
-        (re.compile(r"^(FBA\s*可售|available\s*\(fba\)|fulfillable)$", re.I), "inventory"),
+        (re.compile(r"^(FBA\s*可售|available\s*\(fba\))$", re.I), "inventory"),
         (re.compile(r"^(页面浏览量|page views?|sessions?)$", re.I), "page_views"),
         (re.compile(r"^(售出件数|units sold|ordered units|销量)$", re.I), "orders_30d"),
         (re.compile(r"^(销售额|sales)$", re.I), "revenue_30d"),
-        (re.compile(r"^(可售数量|available quantity)$", re.I), "inventory_alt"),
+        (re.compile(r"^(可售数量|available quantity)$", re.I), "inventory"),
     ]
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -925,9 +1033,13 @@ def parse_inventory_cards_from_text(text: str) -> list[dict[str, Any]]:
         return match.group(1) if match else "0"
 
     for index, line in enumerate(lines):
-        if not asin_re.match(line) or not re.search(r"[0-9]", line):
+        asin_match = re.search(r"\bASIN[:\s]+([A-Z0-9]{10})\b", line, re.I)
+        if asin_match:
+            asin = asin_match.group(1).upper()
+        elif asin_re.match(line) and re.search(r"[0-9]", line):
+            asin = line.upper()
+        else:
             continue
-        asin = line.upper()
         if asin in seen:
             continue
         product_name = ""
@@ -953,7 +1065,7 @@ def parse_inventory_cards_from_text(text: str) -> list[dict[str, Any]]:
             rev_inline = re.search(r"US\$\s*([\d,]+(?:\.\d+)?)", lines[j], re.I)
             if rev_inline and "revenue_30d" not in metrics:
                 metrics["revenue_30d"] = money(rev_inline.group(1))
-        inventory = metrics.get("inventory") or metrics.get("inventory_alt") or metrics.get("on_hand") or "0"
+        inventory = metrics.get("inventory") or metrics.get("on_hand") or metrics.get("inventory_alt") or "0"
         seen.add(asin)
         rows.append(
             {

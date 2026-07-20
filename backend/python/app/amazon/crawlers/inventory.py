@@ -14,6 +14,7 @@ from app.amazon.parsers.seller_pages import (
     EXTRACT_CATALOG_JS,
     EXTRACT_INVENTORY_CARDS_JS,
     EXTRACT_INVENTORY_JS,
+    EXTRACT_MYINVENTORY_GRID_JS,
     parse_inventory_cards_from_text,
 )
 from app.amazon.session_context import looks_login_page, save_capture
@@ -50,29 +51,129 @@ def _click_report_apply(page) -> None:
         pass
 
 
-def crawl_inventory_products(page, *, store_name: str = "") -> list[dict[str, Any]]:
-    max_pages = 3
-    for url_index, url in enumerate(INVENTORY_URLS):
+def crawl_inventory_for_asins(
+    page,
+    asins: list[str],
+    *,
+    store_name: str = "",
+    max_asins: int = 30,
+) -> list[dict[str, Any]]:
+    """在 Manage Inventory 搜索框按 ASIN 补抓 FBA Available。"""
+    if not asins:
+        return []
+    targets = [str(a).strip().upper() for a in asins if str(a).strip()][:max_asins]
+    if not targets:
+        return []
+
+    try:
+        page.goto(INVENTORY_URLS[0], wait_until="domcontentloaded")
+        page.wait_for_timeout(6000)
+    except Exception:
+        return []
+
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    search_selectors = (
+        'input[placeholder*="ASIN"]',
+        'input[placeholder*="asin"]',
+        'input[type="search"]',
+        'input[aria-label*="Search"]',
+    )
+    for asin in targets:
+        if asin in seen:
+            continue
+        try:
+            filled = False
+            for sel in search_selectors:
+                loc = page.locator(sel).first
+                if loc.count() == 0:
+                    continue
+                loc.click(timeout=3000)
+                loc.fill(asin, timeout=3000)
+                loc.press("Enter")
+                filled = True
+                break
+            if not filled:
+                page.evaluate(
+                    """
+                    (asin) => {
+                      const inputs = [...document.querySelectorAll('input')];
+                      const box = inputs.find((el) => /asin|search|sku|title/i.test(
+                        (el.getAttribute('placeholder') || el.getAttribute('aria-label') || '').trim()
+                      ));
+                      if (!box) return false;
+                      box.focus();
+                      box.value = asin;
+                      box.dispatchEvent(new Event('input', { bubbles: true }));
+                      box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+                      return true;
+                    }
+                    """,
+                    asin,
+                )
+            page.wait_for_timeout(3500)
+            found = evaluate_js(page, EXTRACT_MYINVENTORY_GRID_JS)
+            if not found:
+                found = parse_inventory_cards_from_text(page.inner_text("body"))
+            match = next((row for row in found or [] if str(row.get("asin") or "").upper() == asin), None)
+            if match:
+                seen.add(asin)
+                rows.append(match)
+        except Exception:
+            continue
+    return _listing_rows(rows)
+
+
+def crawl_inventory_products(
+    page,
+    *,
+    store_name: str = "",
+    max_pages: int = 3,
+    fast: bool = False,
+) -> list[dict[str, Any]]:
+    inventory_urls = INVENTORY_URLS[:1] if fast else INVENTORY_URLS
+    initial_wait = 7000 if fast else 14000
+    follow_wait = 6000 if fast else 12000
+    network_idle_timeout = 8000 if fast else 12000
+    scroll_wait = 1000 if fast else 1500
+    page_wait = 2000 if fast else 3000
+    for url_index, url in enumerate(inventory_urls):
         try:
             page.goto(url, wait_until="domcontentloaded")
-            page.wait_for_timeout(12000 if url_index else 14000)
+            page.wait_for_timeout(follow_wait if url_index else initial_wait)
             try:
-                page.wait_for_load_state("networkidle", timeout=12000)
+                page.wait_for_load_state("networkidle", timeout=network_idle_timeout)
             except Exception:
                 pass
             all_rows: list[dict[str, Any]] = []
             seen_asins: set[str] = set()
             for _ in range(max_pages):
                 page.evaluate("() => { window.scrollTo(0, document.body.scrollHeight); }")
-                page.wait_for_timeout(1500)
+                page.wait_for_timeout(scroll_wait)
                 body = page.inner_text("body")
                 if looks_login_page(body, page.url):
                     break
-                rows = evaluate_js(page, EXTRACT_INVENTORY_CARDS_JS)
+                rows = evaluate_js(page, EXTRACT_MYINVENTORY_GRID_JS) if "myinventory" in (page.url or "") else []
+                if not rows:
+                    rows = evaluate_js(page, EXTRACT_INVENTORY_CARDS_JS)
                 if not rows:
                     rows = parse_inventory_cards_from_text(body)
+                table_rows = evaluate_js(page, EXTRACT_INVENTORY_JS)
+                if table_rows:
+                    by_asin = {str(r.get("asin") or "").upper(): r for r in rows if r.get("asin")}
+                    for tr in table_rows:
+                        asin = str(tr.get("asin") or "").upper()
+                        if not asin:
+                            continue
+                        inv = str(tr.get("inventory") or "0")
+                        if asin in by_asin:
+                            if int(inv or 0) > int(str(by_asin[asin].get("inventory") or "0")):
+                                by_asin[asin]["inventory"] = inv
+                        else:
+                            by_asin[asin] = tr
+                    rows = list(by_asin.values())
                 if not rows:
-                    rows = evaluate_js(page, EXTRACT_INVENTORY_JS)
+                    rows = table_rows or []
                 if not rows:
                     rows = evaluate_js(page, EXTRACT_CATALOG_JS)
                 for row in rows or []:
@@ -97,14 +198,16 @@ def crawl_inventory_products(page, *, store_name: str = "") -> list[dict[str, An
                 )
                 if not clicked:
                     break
-                page.wait_for_timeout(3000)
+                page.wait_for_timeout(page_wait)
             listing_rows = _listing_rows(all_rows)
             valid = filter_valid_product_rows(listing_rows)
             if valid:
                 return listing_rows or valid
             if listing_rows:
                 return listing_rows
-            if all_rows and url_index >= len(INVENTORY_URLS) - 1:
+            if fast and (valid or listing_rows or all_rows):
+                return listing_rows or all_rows
+            if all_rows and url_index >= len(inventory_urls) - 1:
                 save_capture(page, store_name=store_name, suffix="inv_invalid")
         except Exception:
             continue

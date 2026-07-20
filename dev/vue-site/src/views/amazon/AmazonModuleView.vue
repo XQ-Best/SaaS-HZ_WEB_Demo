@@ -57,6 +57,7 @@ const loading = ref(false)
 const loadingBoss = ref(false)
 const loadingReports = ref(false)
 const loadingAll = ref(false)
+const productDataQuality = ref(null)
 const productSyncIssue = ref(null)
 
 const messagesPanel = ref(null)
@@ -170,6 +171,7 @@ function applyBossData(data) {
   bossProducts.value = data.products || []
   outboundOrders.value = data.outboundOrders || []
   bossSyncedAt.value = data.syncedAt || ''
+  productDataQuality.value = data.dataQuality || null
   if (bossProducts.value.length) {
     const validCount = bossProducts.value.filter(isValidAmazonProduct).length
     if (validCount > 0) {
@@ -261,7 +263,9 @@ async function syncBossInsights(refresh = false) {
       ? await refreshAmazonBossInsights(amazonStores.value, { refresh: true, scope: 'reports' })
       : await loadAmazonBossInsights(amazonStores.value)
     applyBossData(res.data)
-    if (refresh) notifySyncResult(res, '已刷新产品数据')
+    if (refresh) {
+      notifySyncResult(res, '已刷新产品数据')
+    }
   } catch (err) {
     notifySyncError(err)
   } finally {
@@ -298,7 +302,9 @@ async function syncWorkflow(refresh = false) {
       ? await refreshAmazonDailyWorkflow(amazonStores.value, { refresh: true })
       : await loadAmazonDailyWorkflow(amazonStores.value)
     applyWorkflowData(res.data)
-    if (refresh) notifySyncResult(res, '已刷新今日运营数据')
+    if (refresh) {
+      notifySyncResult(res, '已刷新今日运营数据')
+    }
   } catch (err) {
     notifySyncError(err)
   } finally {
@@ -544,6 +550,7 @@ onActivated(loadModule)
               :products="filteredProducts"
               :synced-at="bossSyncedAt"
               :sync-issue="productSyncIssue"
+              :data-quality="productDataQuality"
               :loading="loadingBoss"
               :reports-loading="loadingReports"
               :show-store-column="showStoreColumn"

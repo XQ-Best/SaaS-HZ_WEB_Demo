@@ -9,7 +9,7 @@ from app.amazon.report_crawler import AmazonLoginRequiredError, crawl_amazon
 from app.amazon.write_actions import execute_amazon_write
 from app.ziniao.client import ZiniaoClient, ZiniaoConfig
 
-CRAWL_TIMEOUT_SECONDS = 900
+CRAWL_TIMEOUT_SECONDS = 2400
 CRAWL_TIMEOUT_MINUTES = CRAWL_TIMEOUT_SECONDS // 60
 
 

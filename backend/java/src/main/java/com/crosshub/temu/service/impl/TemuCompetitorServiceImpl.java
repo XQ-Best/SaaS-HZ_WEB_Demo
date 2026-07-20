@@ -1,6 +1,7 @@
 package com.crosshub.temu.service.impl;
 
 import com.crosshub.common.AppErrorCode;
+import com.crosshub.common.TenantCrawlCooldownService;
 import com.crosshub.config.CrawlerProperties;
 import com.crosshub.temu.dto.TemuCompetitorDiscoverRequest;
 import com.crosshub.temu.service.TemuCompetitorService;
@@ -34,22 +35,27 @@ public class TemuCompetitorServiceImpl implements TemuCompetitorService {
     private final CrawlerProperties crawlerProperties;
     private final ObjectMapper objectMapper;
     private final Executor crawlExecutor;
+    private final TenantCrawlCooldownService crawlCooldownService;
 
     public TemuCompetitorServiceImpl(
             DataScopeService dataScopeService,
             CrawlerProperties crawlerProperties,
             ObjectMapper objectMapper,
-            @Qualifier("crawlExecutor") Executor crawlExecutor
+            @Qualifier("crawlExecutor") Executor crawlExecutor,
+            TenantCrawlCooldownService crawlCooldownService
     ) {
         this.dataScopeService = dataScopeService;
         this.crawlerProperties = crawlerProperties;
         this.objectMapper = objectMapper;
         this.crawlExecutor = crawlExecutor;
+        this.crawlCooldownService = crawlCooldownService;
     }
 
     @Override
     public Map<String, Object> discoverCandidates(TemuCompetitorDiscoverRequest request) {
         Long tenantId = dataScopeService.requireTenantId();
+        boolean force = request != null && Boolean.TRUE.equals(request.force());
+        crawlCooldownService.assertAllowed(tenantId, force);
         String keyword = request == null || request.keyword() == null || request.keyword().isBlank()
                 ? "fishing tackle"
                 : request.keyword().trim();
@@ -116,9 +122,12 @@ public class TemuCompetitorServiceImpl implements TemuCompetitorService {
                 fallback.put("keyword", keyword);
                 fallback.put("region", region);
                 fallback.put("candidates", List.of());
+                crawlCooldownService.recordSuccess(tenantId);
                 return fallback;
             }
-            return objectMapper.convertValue(json, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+            Map<String, Object> result = objectMapper.convertValue(json, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+            crawlCooldownService.recordSuccess(tenantId);
+            return result;
         } catch (ResponseStatusException ex) {
             throw ex;
         } catch (Exception ex) {

@@ -10,13 +10,26 @@ import java.util.concurrent.Executor;
 @Configuration
 @EnableAsync
 public class AsyncConfig {
+    /** Temu / AliExpress 运营爬取串行执行，避免并发写 crosshub.db。 */
+    @Bean(name = "crawlJobExecutor")
+    public Executor crawlJobExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(1);
+        executor.setMaxPoolSize(1);
+        executor.setQueueCapacity(64);
+        executor.setThreadNamePrefix("crawl-job-");
+        executor.initialize();
+        return executor;
+    }
+
+    /** 爬虫子进程 stdout/stderr 读取等 I/O 辅助任务。 */
     @Bean(name = "crawlExecutor")
     public Executor crawlExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(2);
         executor.setMaxPoolSize(4);
         executor.setQueueCapacity(16);
-        executor.setThreadNamePrefix("temu-crawl-");
+        executor.setThreadNamePrefix("crawl-io-");
         executor.initialize();
         return executor;
     }

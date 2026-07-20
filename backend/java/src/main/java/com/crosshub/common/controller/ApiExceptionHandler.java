@@ -2,6 +2,7 @@ package com.crosshub.common.controller;
 
 import com.crosshub.common.ApiResult;
 import com.crosshub.common.AppErrorCode;
+import com.crosshub.common.CrawlCooldownException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -15,6 +16,16 @@ import java.util.Map;
 @RestControllerAdvice
 public class ApiExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
+
+    @ExceptionHandler(CrawlCooldownException.class)
+    public ResponseEntity<Map<String, Object>> handleCooldown(CrawlCooldownException ex) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .body(ApiResult.error(
+                        HttpStatus.TOO_MANY_REQUESTS.value(),
+                        AppErrorCode.CRAWL_COOLDOWN.getCode(),
+                        AppErrorCode.CRAWL_COOLDOWN.getUserMessage()
+                ));
+    }
 
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<Map<String, Object>> handle(ResponseStatusException ex) {

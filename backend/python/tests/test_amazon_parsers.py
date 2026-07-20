@@ -115,13 +115,14 @@ def test_page_urls_cover_orders_and_ads() -> None:
     assert any(item["area"] == "订单" for item in page_map_summary())
 
 
-def test_scope_planner_reports_includes_orders_and_ads() -> None:
+def test_scope_planner_reports_focuses_on_product_sources() -> None:
     from app.amazon.scope_planner import plan_tasks
 
     keys = {task.key for task in plan_tasks("reports")}
     assert "br_child_asin" in keys
-    assert "orders_fba_pending" in keys
+    assert "inventory_all" in keys
     assert "ads_campaign_manager" in keys
+    assert "orders_fba_pending" not in keys
 
 
 def test_crawl_pipeline_empty_result_shape() -> None:
@@ -133,19 +134,56 @@ def test_crawl_pipeline_empty_result_shape() -> None:
     assert "merchant_id" in payload
 
 
-def test_allocate_ads_from_acos_only() -> None:
+def test_no_synthetic_acos_from_account_summary() -> None:
     from app.amazon.composer.metrics_merger import coalesce_ads_summary
-    from app.amazon.composer.product_composer import allocate_account_ads_by_revenue
+    from app.amazon.composer.product_composer import enrich_product_rows
 
     products = [
-        {"asin": "B08B8X3Q6C", "revenue_30d": "1,868.13", "orders_30d": "5"},
-        {"asin": "B07ZPMPKBT", "revenue_30d": "199.90", "orders_30d": "2"},
+        {
+            "asin": "B08B8X3Q6C",
+            "product_name": "YOTO Fishing Leaders",
+            "revenue_30d": "1,868.13",
+            "orders_30d": "5",
+        },
+        {
+            "asin": "B07ZPMPKBT",
+            "product_name": "YOTO Fishing Leaders 2Arm",
+            "revenue_30d": "199.90",
+            "orders_30d": "2",
+        },
     ]
     metrics = [{"metric_key": "ad_acos_snapshot", "value_text": "40.84%"}]
     summary = coalesce_ads_summary({}, metrics)
-    merged = allocate_account_ads_by_revenue(products, summary)
-    assert parse_money(str(merged[0].get("ad_spend_30d"))) > 0
-    assert float(merged[0].get("acos") or 0) == 40.84
+    assert summary.get("acos")
+    enriched = enrich_product_rows(products)
+    assert all(parse_money(str(row.get("ad_spend_30d") or "")) == 0 for row in enriched)
+    assert all(float(row.get("acos") or 0) == 0 for row in enriched)
+    assert all(str(row.get("tacos") or "") in ("", "0", "0.0") for row in enriched)
+
+
+def test_tacos_derived_only_with_real_spend() -> None:
+    from app.amazon.composer.product_composer import enrich_product_rows
+
+    rows = enrich_product_rows([{
+        "asin": "B08B8X3Q6C",
+        "product_name": "YOTO Fishing Leaders",
+        "revenue_30d": "100.00",
+        "orders_30d": "5",
+        "ad_spend_30d": "25.00",
+        "acos": "25",
+    }])
+    assert len(rows) == 1
+    assert float(rows[0]["tacos"]) == 25.0
+
+    no_spend = enrich_product_rows([{
+        "asin": "B08B8X3Q6C",
+        "product_name": "YOTO Fishing Leaders",
+        "revenue_30d": "100.00",
+        "orders_30d": "5",
+        "acos": "40.84",
+    }])
+    assert no_spend[0].get("acos") in ("", None)
+    assert no_spend[0].get("tacos") in ("", None)
 
 
 def test_cap_suspicious_order_metrics() -> None:

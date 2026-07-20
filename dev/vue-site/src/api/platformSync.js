@@ -14,6 +14,7 @@ import {
   refreshAliExpressDataWithCrawl,
   fetchTodayAliExpressOrdersFromApi,
   loadAliExpressViolationsFromApi,
+  fetchAliExpressOperationalData,
 } from './aliexpressApi'
 import {
   canUseAmazonBackend,
@@ -26,6 +27,15 @@ import { probeLocalZiniao } from '@/utils/ziniaoProbe'
 import { probeLocalAgent } from '@/utils/agentProbe'
 import { autoSyncCompetitorTargetsOnPlatformRefresh } from '@/api/temuCompetitorsApi'
 import { fetchAmazonStores } from './platformAccounts'
+import { touchPlatformCrawlCooldown } from './platformCrawlCooldown'
+import {
+  createPlatformSyncBatchOptions,
+  formatCooldownRemaining,
+  getCooldownRemainingMs,
+  hasSuccessfulSyncItems,
+  isPlatformCrawlInCooldown,
+  markPlatformCrawlOnSuccess,
+} from '@/utils/platformSyncCooldown'
 import { scopeStores } from '@/utils/scope'
 import {
   DOMESTIC_PLATFORM_OPTIONS,
@@ -154,7 +164,7 @@ async function verifyTemuShopTargets(temuTargets, temuShops, reportTime, job = {
   }
 }
 
-async function syncTemuStores(auth, items, onProgress) {
+async function syncTemuStores(auth, items, onProgress, crawlOpts = {}) {
   const temuTargets = items.filter((item) => item.platform === 'temu')
   if (!temuTargets.length) return
 
@@ -217,7 +227,7 @@ async function syncTemuStores(auth, items, onProgress) {
     })
     onProgress?.([...items])
 
-    const result = await refreshTemuDataWithCrawl()
+    const result = await refreshTemuDataWithCrawl(crawlOpts)
     const reportTime = result.job?.report_time || ''
     const temuShops = await fetchTemuStores(auth)
     await verifyTemuShopTargets(temuTargets, temuShops, reportTime, result.job || {})
@@ -231,7 +241,10 @@ async function syncTemuStores(auth, items, onProgress) {
 
     if (auth.isBoss) {
       try {
-        const competitorSync = await autoSyncCompetitorTargetsOnPlatformRefresh({ maxTargets: 3 })
+        const competitorSync = await autoSyncCompetitorTargetsOnPlatformRefresh({
+          maxTargets: 3,
+          ...crawlOpts,
+        })
         if (competitorSync.triggered > 0) {
           for (const target of temuTargets) {
             if (target.status === 'success' || target.status === 'partial') {
@@ -266,7 +279,7 @@ async function syncTemuStores(auth, items, onProgress) {
   onProgress?.([...items])
 }
 
-async function syncAliExpressStores(auth, items, onProgress) {
+async function syncAliExpressStores(auth, items, onProgress, crawlOpts = {}) {
   const targets = items.filter((item) => item.platform === 'aliexpress')
   if (!targets.length) return
 
@@ -308,7 +321,7 @@ async function syncAliExpressStores(auth, items, onProgress) {
   }
 
   try {
-    const crawlRes = await refreshAliExpressDataWithCrawl({ scope: 'all' })
+    const crawlRes = await refreshAliExpressDataWithCrawl({ scope: 'all', ...crawlOpts })
     const [orderRes, violationRes] = await Promise.all([
       fetchTodayAliExpressOrdersFromApi(),
       loadAliExpressViolationsFromApi(),
@@ -359,7 +372,7 @@ async function syncAliExpressStores(auth, items, onProgress) {
   onProgress?.([...items])
 }
 
-async function syncAmazonStores(auth, items, onProgress) {
+async function syncAmazonStores(auth, items, onProgress, crawlOpts = {}) {
   const targets = items.filter((item) => item.platform === 'amazon')
   if (!targets.length) return
 
@@ -414,7 +427,7 @@ async function syncAmazonStores(auth, items, onProgress) {
 
   try {
     const stores = scopeStores((await fetchAmazonStores()).data || [], auth)
-    const started = await refreshAmazonAccountHealth(stores, { refresh: true })
+    const started = await refreshAmazonAccountHealth(stores, { refresh: true, ...crawlOpts })
     const daily = started.data || (await fetchAmazonDailyFromBackend(stores)).data
     let insights = { products: [] }
     try {
@@ -471,7 +484,126 @@ async function syncAmazonStores(auth, items, onProgress) {
   onProgress?.([...items])
 }
 
-export async function runPlatformAutoSync(auth, { onProgress } = {}) {
+function shouldHydrateStatus(status) {
+  return status === 'pending' || status === 'syncing' || status === 'skipped'
+}
+
+function applyAmazonTargetsFromCache(targets, stores, daily, insights) {
+  const syncedAt = daily.syncedAt || insights.syncedAt || ''
+  for (const target of targets) {
+    const metrics = (daily.accountMetrics || []).filter((m) => m.storeId === target.storeId)
+    const reviews = (daily.reviews || []).filter((r) => r.storeId === target.storeId)
+    const coupons = (daily.coupons || []).filter((c) => c.storeId === target.storeId)
+    const shipments = (daily.shipments || []).filter((s) => s.storeId === target.storeId)
+    const products = (insights.products || []).filter((p) => p.storeId === target.storeId)
+    const rowCount = metrics.length + reviews.length + coupons.length + shipments.length + products.length
+    target.syncedAt = syncedAt
+    target.rowCount = rowCount
+    if (rowCount > 0) {
+      target.status = 'success'
+      const parts = []
+      if (products.length) parts.push(`${products.length} SKU`)
+      if (metrics.length) parts.push(`${metrics.length} 指标`)
+      if (reviews.length) parts.push(`${reviews.length} 差评`)
+      if (coupons.length) parts.push(`${coupons.length} 优惠券`)
+      if (shipments.length) parts.push(`${shipments.length} 货件`)
+      target.message = parts.length ? `已同步 ${parts.join(' / ')}` : '已同步 Amazon 数据'
+    } else {
+      target.status = 'empty'
+      target.message = '暂无 Amazon 入库数据'
+    }
+  }
+}
+
+/** 用后端已入库数据回填仍为 pending/syncing 的侧栏项，避免与各运营页实际数据不一致 */
+export async function hydratePlatformSyncFromBackend(auth, items) {
+  if (!auth?.backendLinked || auth.isWarehouse || !items?.length) return
+
+  const temuTargets = items.filter((item) => item.platform === 'temu' && shouldHydrateStatus(item.status))
+  if (temuTargets.length && canUseTemuBackend(auth)) {
+    const temuShops = await fetchTemuStores(auth).catch(() => [])
+    await verifyTemuShopTargets(temuTargets, temuShops, '', {})
+  }
+
+  const aliexpressTargets = items.filter(
+    (item) => item.platform === 'aliexpress' && shouldHydrateStatus(item.status),
+  )
+  if (aliexpressTargets.length && canUseAliExpressBackend(auth)) {
+    try {
+      const [orderRes, violationRes, operationalRes] = await Promise.all([
+        fetchTodayAliExpressOrdersFromApi(),
+        loadAliExpressViolationsFromApi(),
+        fetchAliExpressOperationalData().catch(() => ({ products: [] })),
+      ])
+      const productCountByStore = {}
+      for (const product of operationalRes.products || []) {
+        const storeId = product.storeId || product.store_id
+        if (!storeId) continue
+        productCountByStore[storeId] = (productCountByStore[storeId] || 0) + 1
+      }
+      const targets = aliexpressTargets
+      const applyCache = (orders, violations, syncedAt) => {
+        for (const target of targets) {
+          const orderCount = orders.filter((order) => order.storeId === target.storeId).length
+          const violationCount = violations.filter((item) => item.storeId === target.storeId).length
+          const productCount = productCountByStore[target.storeId] || 0
+          const rowCount = orderCount + violationCount + productCount
+          target.syncedAt = syncedAt
+          target.rowCount = rowCount
+          if (rowCount > 0) {
+            target.status = 'success'
+            const parts = []
+            if (orderCount > 0) parts.push(`${orderCount} 笔今日订单`)
+            if (violationCount > 0) parts.push(`${violationCount} 条违规`)
+            if (productCount > 0) parts.push(`${productCount} 个商品`)
+            target.message = `已同步 ${parts.join('、')}`
+          } else {
+            target.status = 'empty'
+            target.message = '店铺已绑定，但暂无入库数据'
+          }
+        }
+      }
+      applyCache(
+        orderRes.orders || [],
+        violationRes.violations || [],
+        orderRes.syncedAt || violationRes.syncedAt || '',
+      )
+    } catch {
+      // best effort
+    }
+  }
+
+  const amazonTargets = items.filter(
+    (item) => item.platform === 'amazon' && shouldHydrateStatus(item.status),
+  )
+  if (amazonTargets.length && canUseAmazonBackend()) {
+    try {
+      const stores = scopeStores((await fetchAmazonStores()).data || [], auth)
+      const [dailyRes, insightsRes] = await Promise.all([
+        fetchAmazonDailyFromBackend(stores),
+        fetchAmazonInsightsFromBackend(stores).catch(() => ({ data: { products: [] } })),
+      ])
+      applyAmazonTargetsFromCache(amazonTargets, stores, dailyRes.data || {}, insightsRes.data || {})
+    } catch {
+      // best effort
+    }
+  }
+}
+
+export async function runPlatformAutoSync(auth, { onProgress, force = false } = {}) {
+  if (!force && isPlatformCrawlInCooldown(auth)) {
+    const items = await buildPlatformSyncTargets(auth)
+    await hydratePlatformSyncFromBackend(auth, items)
+    onProgress?.([...items])
+    return {
+      items,
+      skipped: true,
+      cooldown: true,
+      reason: 'cooldown',
+      message: `同步冷却中，${formatCooldownRemaining(getCooldownRemainingMs(auth))}后可再次全量同步`,
+    }
+  }
+
   const items = await buildPlatformSyncTargets(auth)
   if (!items.length) {
     return { items: [], skipped: true, reason: 'no_stores' }
@@ -487,19 +619,29 @@ export async function runPlatformAutoSync(auth, { onProgress } = {}) {
   )
   onProgress?.([...items])
 
+  const crawlOpts = createPlatformSyncBatchOptions(force)
+
   const hasTemuTargets = items.some((item) => item.platform === 'temu')
   if (hasTemuTargets) {
-    await syncTemuStores(auth, items, onProgress)
+    await syncTemuStores(auth, items, onProgress, crawlOpts)
   }
 
   const hasAliExpressTargets = items.some((item) => item.platform === 'aliexpress')
   if (hasAliExpressTargets) {
-    await syncAliExpressStores(auth, items, onProgress)
+    await syncAliExpressStores(auth, items, onProgress, crawlOpts)
   }
 
   const hasAmazonTargets = items.some((item) => item.platform === 'amazon')
   if (hasAmazonTargets) {
-    await syncAmazonStores(auth, items, onProgress)
+    await syncAmazonStores(auth, items, onProgress, crawlOpts)
+  }
+
+  await hydratePlatformSyncFromBackend(auth, items)
+  onProgress?.([...items])
+
+  markPlatformCrawlOnSuccess(auth, items)
+  if (hasSuccessfulSyncItems(items)) {
+    await touchPlatformCrawlCooldown().catch(() => {})
   }
 
   return { items, skipped: false }

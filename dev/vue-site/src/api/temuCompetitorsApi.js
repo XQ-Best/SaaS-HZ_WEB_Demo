@@ -1,5 +1,12 @@
 import { service } from './request'
 import { mapMonitorReport } from '@/utils/temuMonitorReport'
+import {
+  assertPlatformCrawlAllowed,
+  markPlatformCrawlOnSuccess,
+  normalizeCrawlOptions,
+  throwIfCrawlCooldownResponse,
+} from '@/utils/platformSyncCooldown'
+import { AppApiError, getAppErrorMessage } from '@/utils/appErrorCode'
 
 function unwrap(res) {
   return res?.data ?? res
@@ -52,11 +59,24 @@ async function fetchMonitorJob(jobId) {
 
 async function triggerMonitorTarget(id, options = {}) {
   const normalized = typeof options === 'string' ? { reason: options } : options
+  const crawlOpts = normalizeCrawlOptions(normalized)
+  assertPlatformCrawlAllowed(null, crawlOpts)
+
   const res = await service.post(`/api/monitor/targets/${id}/trigger`, {
     reason: normalized.reason || 'manual refresh',
     force: !!normalized.force,
-  })
-  return unwrap(res) || {}
+    bypass_cooldown: Boolean(normalized.bypassCooldown && crawlOpts.force),
+  }, { skipGlobalErrorToast: true, validateStatus: () => true })
+
+  const payload = res?.data ?? res
+  throwIfCrawlCooldownResponse(res, payload, '竞品监控爬取冷却中')
+  if (res.status >= 400) {
+    throw new AppApiError(
+      getAppErrorMessage(payload?.error_code, payload?.msg || '触发竞品监控失败'),
+      payload?.error_code || 'MONITOR_JOB_FAILED',
+    )
+  }
+  return payload?.data ?? payload ?? {}
 }
 
 async function downloadMonitorTargetReportXlsx(id) {
@@ -98,7 +118,8 @@ async function waitForActiveJob(targetId, latest = {}, maxAttempts = 6, delayMs 
 const MANUAL_CRAWL_POLL_ATTEMPTS = 30
 const MANUAL_CRAWL_POLL_DELAY_MS = 2000
 
-async function enqueueManualCrawl(target) {
+async function enqueueManualCrawl(target, options = {}) {
+  const crawlOpts = normalizeCrawlOptions(options)
   const latest = await fetchMonitorLatest(target.id)
   const latestJobStatus = latest.latest_job_status || latest.latestJobStatus
 
@@ -114,11 +135,15 @@ async function enqueueManualCrawl(target) {
 
   try {
     const job = await triggerMonitorTarget(target.id, {
-      reason: 'manual refresh (force)',
-      force: true,
+      reason: 'manual refresh',
+      ...options,
     })
-    if (job?.job_id) {
-      await waitForJob(job.job_id, MANUAL_CRAWL_POLL_ATTEMPTS, MANUAL_CRAWL_POLL_DELAY_MS)
+    const jobId = job?.job_id || job?.jobId
+    if (jobId) {
+      const finished = await waitForJob(jobId, MANUAL_CRAWL_POLL_ATTEMPTS, MANUAL_CRAWL_POLL_DELAY_MS)
+      if (finished?.status === 'success') {
+        markPlatformCrawlOnSuccess(null, { success: true }, { enabled: crawlOpts.recordCooldown })
+      }
     }
   } catch (error) {
     if (error?.errorCode === 'MONITOR_JOB_IN_PROGRESS' && error?.data?.job_id) {
@@ -129,13 +154,16 @@ async function enqueueManualCrawl(target) {
       )
       return
     }
+    if (error?.errorCode === 'CRAWL_COOLDOWN') {
+      throw error
+    }
     if (error?.errorCode !== 'MONITOR_JOB_IN_PROGRESS') {
       throw error
     }
   }
 }
 
-/** 顶栏 Temu 同步后：对无当日快照的 monitor 竞品目标排队抓取（不 force） */
+/** 顶栏 Temu 同步后：对无当日快照的 monitor 竞品目标排队抓取 */
 export async function autoSyncCompetitorTargetsOnPlatformRefresh(options = {}) {
   const maxTargets = Number(options.maxTargets || 3)
   const competitorsRes = await fetchBackendCompetitors()
@@ -158,10 +186,11 @@ export async function autoSyncCompetitorTargetsOnPlatformRefresh(options = {}) {
       await triggerMonitorTarget(target.id, {
         reason: 'platform sync auto',
         force: false,
+        ...options,
       })
       triggered += 1
     } catch (error) {
-      if (error?.errorCode === 'MONITOR_JOB_IN_PROGRESS') {
+      if (error?.errorCode === 'MONITOR_JOB_IN_PROGRESS' || error?.errorCode === 'CRAWL_COOLDOWN') {
         skipped += 1
         continue
       }
@@ -220,11 +249,19 @@ export async function discoverBackendCompetitors(payload = {}) {
     keyword: payload.keyword || 'fishing tackle',
     region: payload.region || 'za',
     limit: payload.limit || 10,
-  })
+  }, { skipGlobalErrorToast: true, validateStatus: () => true })
+  const body = res?.data ?? res
+  throwIfCrawlCooldownResponse(res, body, '竞店发现冷却中')
+  if (res.status >= 400) {
+    throw new AppApiError(
+      getAppErrorMessage(body?.error_code, body?.msg || '竞店发现失败'),
+      body?.error_code || 'COMPETITOR_DISCOVERY_NO_RESULTS',
+    )
+  }
   return { success: true, data: unwrap(res) || {} }
 }
 
-export async function analyzeBackendCompetitors(competitors = []) {
+export async function analyzeBackendCompetitors(competitors = [], options = {}) {
   const selectedIds = new Set((competitors || []).map((item) => item.id).filter(Boolean))
   const competitorsRes = await fetchBackendCompetitors()
   const allCompetitors = competitorsRes.data || []
@@ -233,7 +270,7 @@ export async function analyzeBackendCompetitors(competitors = []) {
     : allCompetitors
 
   for (const target of targets) {
-    await enqueueManualCrawl(target)
+    await enqueueManualCrawl(target, options)
   }
 
   const reports = await Promise.all(targets.map((item) => buildReportForTarget(item)))

@@ -10,7 +10,7 @@ const syncStore = usePlatformSyncStore()
 const visible = computed(() => auth.backendLinked && !auth.isWarehouse)
 
 function statusType(status) {
-  if (status === 'success') return 'success'
+  if (status === 'success' || status === 'partial') return 'success'
   if (status === 'syncing') return 'warning'
   if (status === 'failed' || status === 'empty') return 'danger'
   if (status === 'skipped') return 'info'
@@ -19,6 +19,7 @@ function statusType(status) {
 
 function statusLabel(status) {
   if (status === 'success') return '已同步'
+  if (status === 'partial') return '部分成功'
   if (status === 'syncing') return '同步中'
   if (status === 'failed') return '失败'
   if (status === 'empty') return '无数据'
@@ -27,7 +28,7 @@ function statusLabel(status) {
 }
 
 function statusIcon(status) {
-  if (status === 'success') return CircleCheck
+  if (status === 'success' || status === 'partial') return CircleCheck
   if (status === 'syncing') return Loading
   if (status === 'failed' || status === 'empty') return CircleClose
   if (status === 'skipped') return Warning
@@ -62,6 +63,15 @@ function statusIcon(status) {
           {{ syncStore.lastFinishedAt }}
         </el-text>
       </div>
+
+      <el-text
+        v-if="syncStore.inCooldown && !syncStore.running"
+        size="small"
+        type="info"
+        class="sync-log-panel__cooldown"
+      >
+        {{ syncStore.cooldownHint }}（可点「重新同步」强制刷新）
+      </el-text>
 
       <el-alert
         v-if="syncStore.lastError"
@@ -149,6 +159,12 @@ function statusIcon(status) {
   justify-content: space-between;
   gap: 8px;
   padding-top: 8px;
+}
+
+.sync-log-panel__cooldown {
+  display: block;
+  margin-top: 6px;
+  line-height: 1.45;
 }
 
 .sync-log-panel__alert {

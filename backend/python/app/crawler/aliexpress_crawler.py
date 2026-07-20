@@ -4,12 +4,13 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from app.browser.ae_session import persist_ae_session, resolve_headless_for_ae_crawl
 from app.browser.aliexpress_context import (
     get_or_open_csp_page,
     open_aliexpress_context,
     wait_for_ae_login,
 )
-from app.config import AE_ORDER_PAGE, is_ae_headless
+from app.config import AE_ORDER_PAGE
 from app.crawler.aliexpress_api import AliExpressApiClient
 from app.crawler.aliexpress_mapper import (
     map_jit_consign_orders,
@@ -97,9 +98,11 @@ def crawl_aliexpress_operational(
     all_violations: list[dict[str, Any]] = []
     debug: dict[str, Any] = {"stores": [], "permission_errors": []}
 
-    with open_aliexpress_context(tenant_id, headless=is_ae_headless()) as (_, context):
+    headless = resolve_headless_for_ae_crawl(tenant_id)
+    with open_aliexpress_context(tenant_id, headless=headless) as (_, context):
         page = get_or_open_csp_page(context)
-        wait_for_ae_login(page, tenant_id=tenant_id)
+        wait_for_ae_login(page, tenant_id=tenant_id, context=context)
+        persist_ae_session(tenant_id, page, context)
 
         denied = _detect_permission_denied(page)
         if denied and AE_ORDER_PAGE in (page.url or ""):

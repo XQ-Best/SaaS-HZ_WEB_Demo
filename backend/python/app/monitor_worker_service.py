@@ -141,6 +141,7 @@ def process_next_pending_job(
             (now_text(), snapshot_id, job["id"]),
         )
         conn.commit()
+        record_tenant_crawl_success(conn, int(job["tenant_id"]))
         return {
             "job_id": job["id"],
             "status": "success",
@@ -176,6 +177,20 @@ def monitor_error_from_exception(exc: Exception) -> tuple[str, str]:
         if sep and code.replace("_", "").isalnum():
             return code, rest.strip() or message
     return "MONITOR_JOB_FAILED", message
+
+
+def record_tenant_crawl_success(conn: sqlite3.Connection, tenant_id: int) -> None:
+    now = now_text()
+    conn.execute(
+        """
+        INSERT INTO tenant_crawl_cooldown (tenant_id, last_success_at, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(tenant_id) DO UPDATE SET
+          last_success_at = excluded.last_success_at,
+          updated_at = excluded.updated_at
+        """,
+        (tenant_id, now, now),
+    )
 
 
 def fail_job(conn: sqlite3.Connection, job_id: str, error_code: str, message: str) -> None:

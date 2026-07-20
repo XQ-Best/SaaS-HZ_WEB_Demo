@@ -24,6 +24,8 @@ public enum AppErrorCode {
     CRAWL_SEED_DISABLED("CRAWL_SEED_DISABLED", "当前环境不允许演示数据同步"),
     CRAWL_JOB_NOT_FOUND("CRAWL_JOB_NOT_FOUND", "同步任务不存在"),
     CRAWL_INTERRUPTED("CRAWL_INTERRUPTED", "同步任务已中断，请重新刷新"),
+    CRAWL_COOLDOWN("CRAWL_COOLDOWN", "同步冷却中，请稍后再试或使用侧栏「重新同步」强制刷新"),
+    CRAWL_DB_BUSY("CRAWL_DB_BUSY", "数据库繁忙，请稍后重试"),
 
     AUTH_MISSING_USER("AUTH_MISSING_USER", "登录状态无效，请重新登录"),
     AUTH_MISSING_TENANT("AUTH_MISSING_TENANT", "缺少企业上下文，请重新登录"),
@@ -73,6 +75,7 @@ public enum AppErrorCode {
     AMAZON_SYNC_FAILED("AMAZON_SYNC_FAILED", "Amazon 数据同步失败，请稍后重试"),
     AMAZON_LOGIN_REQUIRED("AMAZON_LOGIN_REQUIRED", "Amazon 卖家后台未登录，请在紫鸟浏览器中重新登录 Seller Central"),
     AMAZON_NO_PRODUCT_ROWS("AMAZON_NO_PRODUCT_ROWS", "同步完成，但未解析到带 ASIN 的产品行"),
+    AMAZON_SYNC_PARTIAL("AMAZON_SYNC_PARTIAL", "产品数据已同步，但部分数据源（库存或广告报表）未采集完整"),
     AMAZON_WRITE_IN_PROGRESS("AMAZON_WRITE_IN_PROGRESS", "已有 Amazon 写操作任务进行中，请稍后再试"),
     AMAZON_WRITE_JOB_NOT_FOUND("AMAZON_WRITE_JOB_NOT_FOUND", "Amazon 写操作任务不存在"),
     AMAZON_WRITE_FAILED("AMAZON_WRITE_FAILED", "Amazon 写操作失败，请稍后重试"),
@@ -201,6 +204,9 @@ public enum AppErrorCode {
         }
         if (text.contains("服务重启中断")) {
             return CRAWL_INTERRUPTED;
+        }
+        if (text.contains("SQLITE_BUSY") || text.contains("database is locked")) {
+            return CRAWL_DB_BUSY;
         }
         if (AE_LOGIN_PATTERN.matcher(text).find()) {
             return CRAWL_AE_NOT_LOGGED_IN;

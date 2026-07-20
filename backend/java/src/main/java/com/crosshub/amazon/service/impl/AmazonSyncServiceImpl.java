@@ -3,11 +3,13 @@ package com.crosshub.amazon.service.impl;
 import com.crosshub.amazon.dto.AmazonSyncRequest;
 import com.crosshub.amazon.entity.AmazonSyncJob;
 import com.crosshub.amazon.repository.AmazonSyncJobRepository;
+import com.crosshub.amazon.service.AmazonOperationalPersistenceService;
 import com.crosshub.amazon.service.AmazonSyncConflictException;
 import com.crosshub.amazon.service.AmazonSyncService;
 import com.crosshub.common.AppErrorCode;
 import com.crosshub.platform.entity.PlatformAccount;
 import com.crosshub.platform.repository.PlatformAccountRepository;
+import com.crosshub.common.TenantCrawlCooldownService;
 import com.crosshub.tenant.service.DataScopeService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -26,15 +28,16 @@ public class AmazonSyncServiceImpl implements AmazonSyncService {
     private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final Set<String> ACTIVE = Set.of("pending", "running");
     private static final Set<String> NEEDS_PRODUCT_ROWS = Set.of("daily", "insights", "reports");
-    private static final long RUNNING_TTL_SECONDS = 16 * 60;
-    private static final long PENDING_TTL_SECONDS = 5 * 60;
+    private static final long RUNNING_TTL_SECONDS = 40 * 60;
+    private static final long PENDING_TTL_SECONDS = 10 * 60;
 
     private final AmazonSyncJobRepository syncJobRepository;
     private final PlatformAccountRepository platformAccountRepository;
     private final DataScopeService dataScopeService;
     private final ObjectMapper objectMapper;
     private final JdbcTemplate jdbc;
-    private final AmazonOperationalPersistenceServiceImpl persistenceService;
+    private final AmazonOperationalPersistenceService persistenceService;
+    private final TenantCrawlCooldownService crawlCooldownService;
 
     public AmazonSyncServiceImpl(
             AmazonSyncJobRepository syncJobRepository,
@@ -42,7 +45,8 @@ public class AmazonSyncServiceImpl implements AmazonSyncService {
             DataScopeService dataScopeService,
             ObjectMapper objectMapper,
             JdbcTemplate jdbc,
-            AmazonOperationalPersistenceServiceImpl persistenceService
+            AmazonOperationalPersistenceService persistenceService,
+            TenantCrawlCooldownService crawlCooldownService
     ) {
         this.syncJobRepository = syncJobRepository;
         this.platformAccountRepository = platformAccountRepository;
@@ -50,11 +54,15 @@ public class AmazonSyncServiceImpl implements AmazonSyncService {
         this.objectMapper = objectMapper;
         this.jdbc = jdbc;
         this.persistenceService = persistenceService;
+        this.crawlCooldownService = crawlCooldownService;
     }
 
     @Transactional
     public Map<String, Object> triggerSync(AmazonSyncRequest request) {
         Long tenantId = dataScopeService.requireTenantId();
+        boolean force = request != null && request.resolvedForce();
+        boolean recordCooldown = request == null || request.resolvedRecordCooldown();
+        crawlCooldownService.assertAllowed(tenantId, force);
         String scope = normalizeScope(request == null ? null : request.scope());
         List<PlatformAccount> targets = resolveTargets(tenantId, request == null ? null : request.platformAccountId());
         if (targets.isEmpty()) {
@@ -90,6 +98,7 @@ public class AmazonSyncServiceImpl implements AmazonSyncService {
             job.setCreatedAt(now());
             job.setResultSummary("{}");
             syncJobRepository.save(job);
+            crawlCooldownService.registerJobRecordPolicy(job.getId(), recordCooldown);
 
             enqueueAgentTask(tenantId, taskId, scope, account);
             jobs.add(jobDto(job));
@@ -160,18 +169,27 @@ public class AmazonSyncServiceImpl implements AmazonSyncService {
             summary = Map.of("products_count", sizeOf(safe.get("products")));
         }
 
-        boolean partial = NEEDS_PRODUCT_ROWS.contains(job.getScope()) && extractProductsCount(summary) <= 0;
+        boolean noProducts = NEEDS_PRODUCT_ROWS.contains(job.getScope()) && extractProductsCount(summary) <= 0;
+        boolean partialSources = hasPartialSourceWarnings(job.getScope(), summary);
+        boolean partial = noProducts || partialSources;
         job.setStatus(partial ? "partial" : "success");
-        if (partial) {
+        if (noProducts) {
             job.setErrorCode(AppErrorCode.AMAZON_NO_PRODUCT_ROWS.getCode());
             job.setErrorMessage(AppErrorCode.AMAZON_NO_PRODUCT_ROWS.getUserMessage());
+        } else if (partialSources) {
+            job.setErrorCode(AppErrorCode.AMAZON_SYNC_PARTIAL.getCode());
+            job.setErrorMessage(partialSourceMessage(summary));
         } else {
             job.setErrorCode("");
             job.setErrorMessage("");
         }
         job.setResultSummary(writeJson(summary));
         job.setFinishedAt(now());
+        persistenceService.finalizeSyncVersion(job.getId(), job.getStatus(), job.getResultSummary());
         syncJobRepository.save(job);
+        if ("success".equals(job.getStatus()) || "partial".equals(job.getStatus())) {
+            crawlCooldownService.onJobSuccess(job.getId(), job.getTenantId());
+        }
     }
 
     private List<PlatformAccount> resolveTargets(Long tenantId, String platformAccountId) {
@@ -222,7 +240,7 @@ public class AmazonSyncServiceImpl implements AmazonSyncService {
     private String normalizeScope(String scope) {
         String s = scope == null || scope.isBlank() ? "account_health" : scope.trim().toLowerCase(Locale.ROOT);
         return switch (s) {
-            case "account_health", "daily", "insights", "reports" -> s;
+            case "account_health", "daily", "insights", "reports", "full" -> s;
             default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, AppErrorCode.BAD_REQUEST.getUserMessage());
         };
     }
@@ -376,6 +394,54 @@ public class AmazonSyncServiceImpl implements AmazonSyncService {
 
     private int sizeOf(Object value) {
         return value instanceof Collection<?> c ? c.size() : 0;
+    }
+
+    private boolean hasPartialSourceWarnings(String scope, Map<String, Object> summary) {
+        if (scope == null || (!"reports".equals(scope) && !"insights".equals(scope))) {
+            return false;
+        }
+        if (extractProductsCount(summary) <= 0) {
+            return false;
+        }
+        Map<String, Object> quality = readMap(summary.get("data_quality"));
+        for (String warning : readStringList(quality.get("warnings"))) {
+            if ("ADS_CSV_EMPTY".equals(warning) || "INV_CSV_EMPTY".equals(warning)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String partialSourceMessage(Map<String, Object> summary) {
+        Map<String, Object> quality = readMap(summary.get("data_quality"));
+        List<String> parts = new ArrayList<>();
+        for (String warning : readStringList(quality.get("warnings"))) {
+            if ("ADS_CSV_EMPTY".equals(warning)) {
+                parts.add("广告 ASIN 报表");
+            } else if ("INV_CSV_EMPTY".equals(warning)) {
+                parts.add("库存导出");
+            }
+        }
+        if (parts.isEmpty()) {
+            return AppErrorCode.AMAZON_SYNC_PARTIAL.getUserMessage();
+        }
+        return "产品数据已同步，但以下数据源未采集完整：" + String.join("、", parts);
+    }
+
+    private List<String> readStringList(Object value) {
+        if (value instanceof Collection<?> collection) {
+            List<String> out = new ArrayList<>();
+            for (Object item : collection) {
+                if (item != null) {
+                    String text = String.valueOf(item).trim();
+                    if (!text.isBlank()) {
+                        out.add(text);
+                    }
+                }
+            }
+            return out;
+        }
+        return List.of();
     }
 
     private String defaultText(String text, String fallback) {

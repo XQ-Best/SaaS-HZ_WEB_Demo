@@ -27,17 +27,24 @@ ORDER_LIST_SPECS: list[dict[str, str]] = [
 ORDER_LIST_URLS = [spec["url"] for spec in ORDER_LIST_SPECS]
 
 # --- Business Report / 商品指标 ---
+# 测绘结论（discover_amazon_sc）：直连 detail URL 可落地 #/dashboard；勿全页匹配「下载」
 REPORTS_URL = "https://sellercentral.amazon.com/business-reports/detail/sales-traffic-by-asin"
+BR_DASHBOARD_URL = "https://sellercentral.amazon.com/business-reports/#/dashboard"
+BR_CHILD_REPORT_URL = (
+    "https://sellercentral.amazon.com/business-reports/detail/sales-traffic-by-asin"
+    "#/report?id=102:DetailSalesTrafficByChildItem"
+)
 REPORT_URLS = [
+    BR_CHILD_REPORT_URL,
     "https://sellercentral.amazon.com/business-reports/detail/sales-traffic-by-asin?cols=%2F0%2F1%2F2%2F3%2F4%2F5%2F6%2F7",
     "https://sellercentral.amazon.com/business-reports/detail/sales-traffic-by-asin?columns=0%2F1%2F2%2F3%2F4%2F5%2F6%2F7",
-    "https://sellercentral.amazon.com/business-reports/detail/sales-traffic-by-asin?cols=%2F0%2F1",
+    BR_DASHBOARD_URL,
     REPORTS_URL,
-    "https://sellercentral.amazon.com/business-reports/detail/sales-traffic-by-parent-asin",
 ]
 
 # --- 库存 / 目录 ---
 INVENTORY_URLS = [
+    "https://sellercentral.amazon.com/myinventory/inventory?fulfilledBy=all&mons_sel_locale=en_US",
     "https://sellercentral.amazon.com/myinventory/inventory?fulfilledBy=all",
     "https://sellercentral.amazon.com/myinventory/inventory",
     "https://sellercentral.amazon.com/inventory",

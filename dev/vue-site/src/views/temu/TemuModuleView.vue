@@ -172,7 +172,7 @@ function markSidebarTemuSync({ status, message, rowCount = 0, syncedAt = '' }) {
   for (const store of stores) {
     syncStore.updateStoreStatus({
       platform: 'temu',
-      storeId: store.accountId || '',
+      storeId: store.accountId || store.id,
       storeName: store.storeName,
       externalShopId: store.externalShopId || store.id,
       status,

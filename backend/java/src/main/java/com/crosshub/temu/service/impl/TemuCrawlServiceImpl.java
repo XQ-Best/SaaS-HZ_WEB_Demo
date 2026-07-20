@@ -1,9 +1,10 @@
 package com.crosshub.temu.service.impl;
 
 import com.crosshub.common.AppErrorCode;
+import com.crosshub.common.SqliteRetry;
 import com.crosshub.platform.service.PlatformAccountService;
 import com.crosshub.temu.service.TemuCrawlService;
-import com.crosshub.tenant.service.DataScopeService;
+import com.crosshub.common.TenantCrawlCooldownService;
 import com.crosshub.temu.service.TemuCrawlAuthService;
 import com.crosshub.temu.service.TemuSessionService;
 import com.crosshub.temu.service.CrawlConflictException;
@@ -12,6 +13,7 @@ import com.crosshub.config.CrawlerProperties;
 import com.crosshub.temu.entity.TemuCrawlJob;
 import com.crosshub.temu.repository.TemuCrawlJobRepository;
 import com.crosshub.security.AuthContext;
+import com.crosshub.tenant.service.DataScopeService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -56,9 +58,11 @@ public class TemuCrawlServiceImpl implements TemuCrawlService {
     private final AuthContext authContext;
     private final CrawlerProperties crawlerProperties;
     private final ObjectMapper objectMapper;
+    private final Executor crawlJobExecutor;
     private final Executor crawlExecutor;
     private final PlatformAccountService platformAccountService;
     private final TemuSessionService temuSessionService;
+    private final TenantCrawlCooldownService crawlCooldownService;
 
     public TemuCrawlServiceImpl(
             TemuCrawlJobRepository jobRepository,
@@ -67,9 +71,11 @@ public class TemuCrawlServiceImpl implements TemuCrawlService {
             AuthContext authContext,
             CrawlerProperties crawlerProperties,
             ObjectMapper objectMapper,
+            @Qualifier("crawlJobExecutor") Executor crawlJobExecutor,
             @Qualifier("crawlExecutor") Executor crawlExecutor,
             PlatformAccountService platformAccountService,
-            TemuSessionService temuSessionService
+            TemuSessionService temuSessionService,
+            TenantCrawlCooldownService crawlCooldownService
     ) {
         this.jobRepository = jobRepository;
         this.crawlAuthService = crawlAuthService;
@@ -77,15 +83,28 @@ public class TemuCrawlServiceImpl implements TemuCrawlService {
         this.authContext = authContext;
         this.crawlerProperties = crawlerProperties;
         this.objectMapper = objectMapper;
+        this.crawlJobExecutor = crawlJobExecutor;
         this.crawlExecutor = crawlExecutor;
         this.platformAccountService = platformAccountService;
         this.temuSessionService = temuSessionService;
+        this.crawlCooldownService = crawlCooldownService;
     }
 
     @Transactional
     public TemuCrawlJob triggerCrawl(String reportTime, boolean seed) {
+        return triggerCrawl(reportTime, seed, false);
+    }
+
+    @Transactional
+    public TemuCrawlJob triggerCrawl(String reportTime, boolean seed, boolean force) {
+        return triggerCrawl(reportTime, seed, force, true);
+    }
+
+    @Transactional
+    public TemuCrawlJob triggerCrawl(String reportTime, boolean seed, boolean force, boolean recordCooldown) {
         crawlAuthService.assertCanTriggerCrawl();
         Long tenantId = dataScopeService.requireTenantId();
+        crawlCooldownService.assertAllowed(tenantId, force);
         Long userId = authContext.userId();
         if (userId == null) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, AppErrorCode.AUTH_MISSING_USER.getUserMessage());
@@ -115,9 +134,10 @@ public class TemuCrawlServiceImpl implements TemuCrawlService {
         job.setReportTime(reportTime);
         job.setCreatedAt(now());
         jobRepository.save(job);
+        crawlCooldownService.registerJobRecordPolicy(job.getId(), recordCooldown);
 
         String jobId = job.getId();
-        scheduleAfterCommit(() -> crawlExecutor.execute(() -> executeJob(jobId)));
+        scheduleAfterCommit(() -> crawlJobExecutor.execute(() -> executeJob(jobId)));
         return job;
     }
 
@@ -142,15 +162,32 @@ public class TemuCrawlServiceImpl implements TemuCrawlService {
     }
 
     void executeJob(String jobId) {
-        TemuCrawlJob job = jobRepository.findById(jobId).orElse(null);
-        if (job == null) {
-            return;
+        TemuCrawlJob job = null;
+        try {
+            job = jobRepository.findById(jobId).orElse(null);
+            if (job == null) {
+                return;
+            }
+
+            job.setStatus("running");
+            job.setStartedAt(now());
+            persistJob(job);
+
+            runCrawlProcess(job);
+        } catch (Exception ex) {
+            log.error("Temu crawl job {} failed", jobId, ex);
+            if (job != null) {
+                AppErrorCode code = SqliteRetry.isLockConflict(ex)
+                        ? AppErrorCode.CRAWL_DB_BUSY
+                        : AppErrorCode.classifyCrawlRaw(ex.getMessage());
+                String raw = ex.getMessage() == null ? "爬取进程异常" : ex.getMessage();
+                failJob(job, code, raw);
+            }
         }
+    }
 
-        job.setStatus("running");
-        job.setStartedAt(now());
-        jobRepository.save(job);
-
+    private void runCrawlProcess(TemuCrawlJob job) throws Exception {
+        String jobId = job.getId();
         Path scriptDir = Path.of(crawlerProperties.getScriptDir()).toAbsolutePath().normalize();
         if (!Files.isDirectory(scriptDir)) {
             failJob(job, AppErrorCode.CRAWL_SCRIPT_MISSING, "Python 脚本目录不存在: " + scriptDir);
@@ -177,73 +214,68 @@ public class TemuCrawlServiceImpl implements TemuCrawlService {
         builder.redirectErrorStream(false);
 
         long started = System.currentTimeMillis();
+        log.info("Starting temu crawl job {} tenant={} mode={}", jobId, job.getTenantId(), job.getMode());
+        Process process = builder.start();
+        CompletableFuture<String> stdoutFuture = CompletableFuture.supplyAsync(
+                () -> safeReadStream(process.getInputStream()),
+                crawlExecutor
+        );
+        CompletableFuture<String> stderrFuture = CompletableFuture.supplyAsync(
+                () -> safeReadStream(process.getErrorStream()),
+                crawlExecutor
+        );
+        boolean finished = process.waitFor(crawlerProperties.getTimeoutSeconds(), TimeUnit.SECONDS);
+        if (!finished) {
+            process.destroyForcibly();
+            stdoutFuture.cancel(true);
+            stderrFuture.cancel(true);
+            failJob(job, AppErrorCode.CRAWL_TIMEOUT, "爬取超时（" + crawlerProperties.getTimeoutSeconds() + "s）");
+            return;
+        }
+
+        String stdout = "";
+        String stderr = "";
+        try { stdout = stdoutFuture.get(3, TimeUnit.SECONDS); } catch (TimeoutException ignored) { stdoutFuture.cancel(true); }
+        try { stderr = stderrFuture.get(3, TimeUnit.SECONDS); } catch (TimeoutException ignored) { stderrFuture.cancel(true); }
+
+        int exitCode = process.exitValue();
+        long elapsed = System.currentTimeMillis() - started;
+        log.info("Temu crawl job {} finished exit={} elapsed={}ms", jobId, exitCode, elapsed);
+
+        if (exitCode != 0) {
+            String raw = combineOutput(stderr, stdout);
+            AppErrorCode code = AppErrorCode.classifyCrawlRaw(raw);
+            failJob(job, code, raw);
+            return;
+        }
+
+        JsonNode json = parseJsonLine(stdout);
+        if (json != null) {
+            if (json.has("report_time")) {
+                job.setReportTime(json.get("report_time").asText());
+            }
+            if (json.has("shops")) {
+                job.setShopsCount(json.get("shops").asInt());
+            }
+            if (json.has("rows")) {
+                job.setRowsCount(json.get("rows").asInt());
+            }
+        }
+
+        job.setStatus("success");
+        job.setFinishedAt(now());
+        job.setErrorCode("");
+        job.setErrorMessage("");
+        persistJob(job);
+        crawlCooldownService.onJobSuccess(job.getId(), job.getTenantId());
+
         try {
-            log.info("Starting temu crawl job {} tenant={} mode={}", jobId, job.getTenantId(), job.getMode());
-            Process process = builder.start();
-            CompletableFuture<String> stdoutFuture = CompletableFuture.supplyAsync(
-                    () -> safeReadStream(process.getInputStream()),
-                    crawlExecutor
-            );
-            CompletableFuture<String> stderrFuture = CompletableFuture.supplyAsync(
-                    () -> safeReadStream(process.getErrorStream()),
-                    crawlExecutor
-            );
-            boolean finished = process.waitFor(crawlerProperties.getTimeoutSeconds(), TimeUnit.SECONDS);
-            if (!finished) {
-                process.destroyForcibly();
-                stdoutFuture.cancel(true);
-                stderrFuture.cancel(true);
-                failJob(job, AppErrorCode.CRAWL_TIMEOUT, "爬取超时（" + crawlerProperties.getTimeoutSeconds() + "s）");
-                return;
+            int linked = platformAccountService.autoLinkTemuShops(job.getTenantId());
+            if (linked > 0) {
+                log.info("Auto-linked {} temu account(s) for tenant {}", linked, job.getTenantId());
             }
-
-            String stdout = "";
-            String stderr = "";
-            try { stdout = stdoutFuture.get(3, TimeUnit.SECONDS); } catch (TimeoutException ignored) { stdoutFuture.cancel(true); }
-            try { stderr = stderrFuture.get(3, TimeUnit.SECONDS); } catch (TimeoutException ignored) { stderrFuture.cancel(true); }
-
-            int exitCode = process.exitValue();
-            long elapsed = System.currentTimeMillis() - started;
-            log.info("Temu crawl job {} finished exit={} elapsed={}ms", jobId, exitCode, elapsed);
-
-            if (exitCode != 0) {
-                String raw = combineOutput(stderr, stdout);
-                AppErrorCode code = AppErrorCode.classifyCrawlRaw(raw);
-                failJob(job, code, raw);
-                return;
-            }
-
-            JsonNode json = parseJsonLine(stdout);
-            if (json != null) {
-                if (json.has("report_time")) {
-                    job.setReportTime(json.get("report_time").asText());
-                }
-                if (json.has("shops")) {
-                    job.setShopsCount(json.get("shops").asInt());
-                }
-                if (json.has("rows")) {
-                    job.setRowsCount(json.get("rows").asInt());
-                }
-            }
-
-            job.setStatus("success");
-            job.setFinishedAt(now());
-            job.setErrorCode("");
-            job.setErrorMessage("");
-            jobRepository.save(job);
-
-            try {
-                int linked = platformAccountService.autoLinkTemuShops(job.getTenantId());
-                if (linked > 0) {
-                    log.info("Auto-linked {} temu account(s) for tenant {}", linked, job.getTenantId());
-                }
-            } catch (Exception linkEx) {
-                log.warn("Auto-link temu accounts failed for tenant {}", job.getTenantId(), linkEx);
-            }
-        } catch (Exception ex) {
-            log.error("Temu crawl job {} failed", jobId, ex);
-            String raw = ex.getMessage() == null ? "爬取进程异常" : ex.getMessage();
-            failJob(job, AppErrorCode.classifyCrawlRaw(raw), raw);
+        } catch (Exception linkEx) {
+            log.warn("Auto-link temu accounts failed for tenant {}", job.getTenantId(), linkEx);
         }
     }
 
@@ -302,8 +334,20 @@ public class TemuCrawlServiceImpl implements TemuCrawlService {
         job.setFinishedAt(now());
         job.setErrorCode(AppErrorCode.CRAWL_INTERRUPTED.getCode());
         job.setErrorMessage(AppErrorCode.CRAWL_INTERRUPTED.getUserMessage());
-        jobRepository.save(job);
+        persistJobQuietly(job);
         log.warn("Temu crawl job {} marked stale -> failed", job.getId());
+    }
+
+    private void persistJob(TemuCrawlJob job) {
+        SqliteRetry.runWithRetry(() -> jobRepository.save(job));
+    }
+
+    private void persistJobQuietly(TemuCrawlJob job) {
+        try {
+            persistJob(job);
+        } catch (Exception ex) {
+            log.error("Temu crawl job {} persist failed", job.getId(), ex);
+        }
     }
 
     private LocalDateTime parseTime(String text) {
@@ -335,7 +379,7 @@ public class TemuCrawlServiceImpl implements TemuCrawlService {
         job.setFinishedAt(now());
         job.setErrorCode(code.getCode());
         job.setErrorMessage(code.getUserMessage());
-        jobRepository.save(job);
+        persistJobQuietly(job);
     }
 
     private void partialJob(TemuCrawlJob job, AppErrorCode code, String internalDetail) {
@@ -344,7 +388,7 @@ public class TemuCrawlServiceImpl implements TemuCrawlService {
         job.setFinishedAt(now());
         job.setErrorCode(code.getCode());
         job.setErrorMessage("爬取已完成，但任务收尾异常，页面数据可能已更新");
-        jobRepository.save(job);
+        persistJobQuietly(job);
     }
 
     private boolean hasPersistedPayload(TemuCrawlJob job) {

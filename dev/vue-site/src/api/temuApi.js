@@ -1,5 +1,12 @@
 import axios from 'axios'
 import { AppApiError, getAppErrorMessage, toAppApiError } from '@/utils/appErrorCode'
+import {
+  assertPlatformCrawlAllowed,
+  applyCrawlRequestFlags,
+  markPlatformCrawlOnSuccess,
+  normalizeCrawlOptions,
+  throwIfCrawlCooldownResponse,
+} from '@/utils/platformSyncCooldown'
 import { service, getAccessToken } from './request'
 import { mapReptileSaleToTemuProduct } from '@/utils/mapReptileSaleToTemuProduct'
 import { enrichAllProducts } from '@/utils/temu'
@@ -162,8 +169,12 @@ export function formatCrawlError(errorCode, message) {
 }
 
 export async function triggerTemuCrawl(options = {}) {
+  const crawlOpts = normalizeCrawlOptions(options)
+  assertPlatformCrawlAllowed(null, crawlOpts)
+
   const body = {}
   if (options.reportTime) body.report_time = options.reportTime
+  applyCrawlRequestFlags(body, options)
 
   const token = getAccessToken()
   const res = await axios.post('/api/temu/crawl', body, {
@@ -178,6 +189,7 @@ export async function triggerTemuCrawl(options = {}) {
 
   const payload = res.data
   const job = payload?.data ?? payload
+  throwIfCrawlCooldownResponse(res, payload, '触发 Temu 爬取失败')
   if (res.status === 202 || payload?.code === 0) {
     return { conflict: false, job }
   }
@@ -197,6 +209,8 @@ export async function fetchTemuCrawlJob(jobId) {
 }
 
 export async function refreshTemuDataWithCrawl(options = {}) {
+  const crawlOpts = normalizeCrawlOptions(options)
+
   const started = await triggerTemuCrawl(options)
   const jobId = started.job?.job_id || started.job?.jobId || started.job?.id
   if (!jobId) {
@@ -213,7 +227,7 @@ export async function refreshTemuDataWithCrawl(options = {}) {
   while (Date.now() < deadline) {
     const job = await fetchTemuCrawlJob(jobId)
     if (job.status === 'success' || job.status === 'partial') {
-      return {
+      const result = {
         success: true,
         partial: job.status === 'partial',
         job,
@@ -222,6 +236,8 @@ export async function refreshTemuDataWithCrawl(options = {}) {
           ? (job.error_message || '爬取已完成，但任务收尾异常，页面数据可能已更新')
           : (started.conflict ? '已等待进行中的爬取任务完成' : ''),
       }
+      markPlatformCrawlOnSuccess(null, result, { enabled: crawlOpts.recordCooldown })
+      return result
     }
     if (job.status === 'failed') {
       throw new AppApiError(

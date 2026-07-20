@@ -26,9 +26,14 @@ public class TemuCrawlController {
 
     @PostMapping("/crawl")
     public ResponseEntity<Map<String, Object>> trigger(@RequestBody(required = false) CrawlRequest request) {
-        CrawlRequest body = request == null ? new CrawlRequest(null, null) : request;
+        CrawlRequest body = request == null ? new CrawlRequest(null, null, null, null) : request;
         try {
-            TemuCrawlJob job = crawlService.triggerCrawl(body.reportTime(), false);
+            TemuCrawlJob job = crawlService.triggerCrawl(
+                    body.reportTime(),
+                    Boolean.TRUE.equals(body.seed()),
+                    body.resolvedForce(),
+                    body.resolvedRecordCooldown()
+            );
             return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResult.ok(temuMapper.toCrawlJobDto(job)));
         } catch (CrawlConflictException ex) {
             return ResponseEntity.status(HttpStatus.CONFLICT)

@@ -22,7 +22,11 @@ public class AmazonAccountDedupeServiceImpl implements AmazonAccountDedupeServic
             "amazon_product_snapshot",
             "amazon_account_metric",
             "amazon_operational_item",
-            "amazon_sync_job"
+            "amazon_sync_job",
+            "amazon_sync_version",
+            "amazon_product_version",
+            "amazon_metric_version",
+            "amazon_item_version"
     );
 
     private final PlatformAccountRepository platformAccountRepository;
